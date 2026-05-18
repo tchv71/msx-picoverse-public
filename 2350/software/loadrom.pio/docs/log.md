@@ -12,9 +12,10 @@
 - Delayed the PIO1 I/O write sample point inside `/WR` low so plain `0x10`/`0x11` port writes are latched after the address and data lines have fully settled.
 - Added the shared PicoVerse 2350 Dual PSG implementation reference covering LoadROM and Explorer behavior.
 - Added MSX-MUSIC/YM2413 emulation for non-SYSTEM ROMs through `-f` / `-fmpac`, capturing OPLL writes on I/O ports `0x7C`/`0x7D` via PIO1 and streaming emu2413 audio through the I2S DAC.
-- Enforced MSX-MUSIC as a mutually-exclusive cartridge audio mode with SCC, SCC+, and Dual PSG, while allowing it on Konami SCC / Manbow2 ROM mappers when SCC emulation is not enabled; documented the emu2413 credit in the public README.
+- Enforced MSX-MUSIC as a mutually-exclusive cartridge audio mode with SCC, SCC+, and Dual PSG; documented the emu2413 credit in the public README.
 - Embedded the English FM-PAC BIOS (`FMPCCMFC.BIN`) into the LoadROM tool output for every `-f` / `-fmpac` non-SYSTEM ROM image and exposed it from the firmware through an expanded FM-PAC subslot.
 - Added firmware handling for FM-PAC memory-mapped YM2413 registers (`0x7FF4`/`0x7FF5`), FM-PAC control/page registers, and PAC SRAM key gating while preserving the selected game mapper in the primary subslot.
 - Updated the 2350 LoadROM manual and public copyright notes to describe FM-PAC BIOS inclusion and credit the bundled BIOS/translation sources.
 - Added a detailed PicoVerse 2350 MSX-MUSIC / FM-PAC implementation guide covering the tool packaging, UF2 layout, firmware audio path, expanded-slot BIOS exposure, mapper routing, and limitations.
 - Updated the public README with user-facing LoadROM instructions for MSX-MUSIC/FM-PAC and Dual PSG command-line builds.
+- Removed Konami SCC and Manbow2 from the supported MSX-MUSIC/FM-PAC mapper set; the LoadROM tool now rejects `-f` / `-fmpac` for those ROMs and the firmware FM-PAC wrapper no longer carries SCC-class mapper branches.

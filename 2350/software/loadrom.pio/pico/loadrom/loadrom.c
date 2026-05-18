@@ -117,9 +117,8 @@ typedef enum {
     AUDIO_MODE_MSX_MUSIC,    // MSX-MUSIC YM2413 on I/O 0x7C/0x7D via I2S
 } audio_mode_t;
 
-// Resolve which audio engine to activate for this cartridge. SCC/SCC+ and
-// MSX-MUSIC are mutually exclusive tool choices, but MSX-MUSIC is valid
-// for SCC-capable mappers when the SCC chip is not enabled.
+// Resolve which audio engine to activate for this cartridge. Audio flags are
+// mutually exclusive tool choices, and SCC-class mappers keep their dedicated paths.
 static inline audio_mode_t resolve_audio_mode(uint8_t rom_type, uint8_t base_rom_type, bool system_mode)
 {
     if (system_mode)
@@ -134,7 +133,7 @@ static inline audio_mode_t resolve_audio_mode(uint8_t rom_type, uint8_t base_rom
     if (scc_capable && scc_plus_flag) return AUDIO_MODE_SCC_PLUS;
     if (scc_capable && scc_flag)      return AUDIO_MODE_SCC;
     if (dual_psg_flag)                return AUDIO_MODE_DUAL_PSG;
-    if (msx_music_flag)               return AUDIO_MODE_MSX_MUSIC;
+    if (msx_music_flag && !scc_capable) return AUDIO_MODE_MSX_MUSIC;
     return AUDIO_MODE_NONE;
 }
 
@@ -3035,44 +3034,10 @@ void __no_inline_not_in_flash_func(loadrom_fmpac)(uint32_t offset, bool cache_en
     uint16_t neo16_regs[3] = {0, 1, 2};
     uint16_t ascii16x_regs[2] = {0, 0};
 
-    static const uint32_t MBW2_WRITABLE_SECTOR_SIZE = 0x10000u;
-    static const uint32_t MBW2_WRITABLE_SECTOR_OFFSET = 0x70000u;
-    uint8_t *mbw2_writable_sram = &rom_sram[CACHE_SIZE - MBW2_WRITABLE_SECTOR_SIZE];
-    manbow2_ctx_t mb = {
-        .bank_regs = {0, 1, 2, 3},
-        .state = MBW2_READ,
-        .writable_sram = mbw2_writable_sram,
-        .writable_offset = MBW2_WRITABLE_SECTOR_OFFSET,
-        .writable_size = MBW2_WRITABLE_SECTOR_SIZE,
-        .rom_size_mask = 0
-    };
-
-    if (base_rom_type == 14u)
-        rom_cache_capacity = CACHE_SIZE - MBW2_WRITABLE_SECTOR_SIZE;
-
     const uint8_t *rom_base;
     uint32_t available_length;
     prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length);
     const uint8_t *fmpac_bios_base = rom + offset + active_rom_size;
-
-    if (base_rom_type == 14u)
-    {
-        const uint8_t *flash_rom = rom + offset;
-        if (available_length >= MBW2_WRITABLE_SECTOR_OFFSET + MBW2_WRITABLE_SECTOR_SIZE)
-        {
-            memcpy(mbw2_writable_sram, flash_rom + MBW2_WRITABLE_SECTOR_OFFSET, MBW2_WRITABLE_SECTOR_SIZE);
-        }
-        else if (available_length > MBW2_WRITABLE_SECTOR_OFFSET)
-        {
-            uint32_t partial = available_length - MBW2_WRITABLE_SECTOR_OFFSET;
-            memcpy(mbw2_writable_sram, flash_rom + MBW2_WRITABLE_SECTOR_OFFSET, partial);
-            memset(mbw2_writable_sram + partial, 0xFF, MBW2_WRITABLE_SECTOR_SIZE - partial);
-        }
-        else
-        {
-            memset(mbw2_writable_sram, 0xFF, MBW2_WRITABLE_SECTOR_SIZE);
-        }
-    }
 
     uint8_t subslot_reg = 0x00u;
     static fmpac_state_t fmpac;
@@ -3104,14 +3069,12 @@ void __no_inline_not_in_flash_func(loadrom_fmpac)(uint32_t offset, bool cache_en
             {
                 switch (base_rom_type)
                 {
-                    case 3:  handle_konamiscc_write(waddr, wdata, &bank8_ctx); break;
                     case 5:  handle_ascii8_write(waddr, wdata, &bank8_ctx); break;
                     case 6:  handle_ascii16_write(waddr, wdata, &ascii16_ctx); break;
                     case 7:  handle_konami_write(waddr, wdata, &bank8_ctx); break;
                     case 8:  handle_neo8_write(waddr, wdata, &neo8_ctx); break;
                     case 9:  handle_neo16_write(waddr, wdata, &neo16_ctx); break;
                     case 12: handle_ascii16x_write_simple(waddr, wdata, ascii16x_regs); break;
-                    case 14: handle_manbow2_write(waddr, wdata, &mb); break;
                 }
             }
             else if (active_subslot == 3)
@@ -3146,7 +3109,6 @@ void __no_inline_not_in_flash_func(loadrom_fmpac)(uint32_t offset, bool cache_en
                             mapped = (addr >= 0x4000u && addr <= 0xBFFFu);
                             rel = addr - 0x4000u;
                             break;
-                        case 3:
                         case 5:
                         case 7:
                             mapped = (addr >= 0x4000u && addr <= 0xBFFFu);
@@ -3179,25 +3141,6 @@ void __no_inline_not_in_flash_func(loadrom_fmpac)(uint32_t offset, bool cache_en
                         case 13:
                             mapped = true;
                             rel = addr;
-                            break;
-                        case 14:
-                            mapped = (addr >= 0x4000u && addr <= 0xBFFFu);
-                            if (mapped)
-                            {
-                                uint8_t mb_page = (uint8_t)((addr - 0x4000u) >> 13);
-                                rel = ((uint32_t)mb.bank_regs[mb_page] << 13) | (addr & 0x1FFFu);
-                                if (mb.state == MBW2_AUTOSELECT)
-                                {
-                                    uint32_t id_addr = rel & 0x03u;
-                                    data = (id_addr == 0x00u) ? 0x01u : (id_addr == 0x01u) ? 0xA4u : (id_addr == 0x02u) ? ((rel >= mb.writable_offset && rel < mb.writable_offset + mb.writable_size) ? 0x00u : 0x01u) : 0x00u;
-                                    mapped = false;
-                                }
-                                else if (rel >= mb.writable_offset && rel < mb.writable_offset + mb.writable_size)
-                                {
-                                    data = mbw2_writable_sram[rel - mb.writable_offset];
-                                    mapped = false;
-                                }
-                            }
                             break;
                     }
 

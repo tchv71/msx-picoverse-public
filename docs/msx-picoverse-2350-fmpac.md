@@ -18,7 +18,7 @@ The FM-PAC/MSX-MUSIC support was added for ROMs that expect MSX-MUSIC hardware t
 The design goals are:
 
 - Keep MSX-MUSIC as a single cartridge audio profile, mutually exclusive with SCC, SCC+, and Dual PSG.
-- Allow `-f` / `-fmpac` with any supported non-SYSTEM external ROM mapper, including Konami SCC and Manbow2 mappers when SCC audio is not enabled.
+- Allow `-f` / `-fmpac` with supported non-SYSTEM external ROM mappers, excluding SCC-class mappers.
 - Embed the FM-PAC BIOS in the UF2 image, immediately after the game ROM payload.
 - Present the selected game ROM mapper and the FM-PAC BIOS in one expanded cartridge slot layout.
 - Route both direct YM2413 I/O writes and FM-PAC memory-mapped register writes to the same OPLL emulator instance.
@@ -43,7 +43,7 @@ MSX-MUSIC/FM-PAC Emulation: Enabled with BIOS and YM2413 ports 0x7C/0x7D
 
 ### Valid combinations
 
-`-f` / `-fmpac` is valid only with non-SYSTEM external ROM files. It is rejected for the embedded Sunrise/Carnivore2 system modes (`-s1`, `-m1`, `-s2`, `-m2`, `-c1`, `-c2`).
+`-f` / `-fmpac` is valid only with non-SYSTEM external ROM files. It is rejected for the embedded Sunrise/Carnivore2 system modes (`-s1`, `-m1`, `-s2`, `-m2`, `-c1`, `-c2`) and for Konami SCC or Manbow2 mapper ROMs.
 
 Only one cartridge audio engine can be active in a UF2 image. The tool rejects combinations of:
 
@@ -52,7 +52,7 @@ Only one cartridge audio engine can be active in a UF2 image. The tool rejects c
 - `-d` / `--dual-psg`
 - `-f` / `-fmpac` / `--fmpac`
 
-Konami SCC and Manbow2 mapper ROMs can use `-f` / `-fmpac`, but SCC/SCC+ audio emulation is not enabled in that build. The mapper behavior remains available for the ROM; only the audio profile changes to MSX-MUSIC.
+Konami SCC and Manbow2 mapper ROMs are not accepted for `-f` / `-fmpac` builds.
 
 ---
 
@@ -159,7 +159,7 @@ The modes are:
 | `AUDIO_MODE_DUAL_PSG` | Secondary AY-3-8910 on ports `0x10`/`0x11`. |
 | `AUDIO_MODE_MSX_MUSIC` | YM2413/MSX-MUSIC on ports `0x7C`/`0x7D` plus FM-PAC BIOS exposure. |
 
-System ROM modes always resolve to `AUDIO_MODE_NONE` for this path. For Konami SCC and Manbow2 mappers, SCC/SCC+ flags take precedence if present. Because the tool enforces mutual exclusion, a valid `-f` / `-fmpac` image contains only the MSX-MUSIC flag and therefore resolves to `AUDIO_MODE_MSX_MUSIC`.
+System ROM modes always resolve to `AUDIO_MODE_NONE` for this path. Because the tool enforces mutual exclusion, a valid `-f` / `-fmpac` image contains only the MSX-MUSIC flag and therefore resolves to `AUDIO_MODE_MSX_MUSIC`.
 
 When `AUDIO_MODE_MSX_MUSIC` is selected, `main()` initializes the YM2413 engine and then dispatches to `loadrom_fmpac()` before the normal mapper switch.
 
@@ -300,7 +300,7 @@ Because `FMPAC_BIOS_SIZE` is 65536 bytes, the four pages cover the whole embedde
 | --- | --- | --- |
 | 1 | Plain 16 KB | Serves the fixed ROM window through the plain mapper path. |
 | 2 | Plain 32 KB | Serves the fixed ROM window through the plain mapper path. |
-| 3 | Konami SCC mapper | Uses Konami SCC banking addresses, but does not enable SCC audio. |
+| 3 | Konami SCC mapper | Not supported for FM-PAC/MSX-MUSIC builds. |
 | 4 | Planar 48 KB | Serves the linear 48 KB style address range. |
 | 5 | ASCII8 | Uses 8 KB ASCII bank registers. |
 | 6 | ASCII16 | Uses 16 KB ASCII bank registers. |
@@ -309,22 +309,9 @@ Because `FMPAC_BIOS_SIZE` is 65536 bytes, the four pages cover the whole embedde
 | 9 | NEO16 | Uses three 16 KB NEO bank registers. |
 | 12 | ASCII16-X | Uses the ASCII16-X bank register layout for mirrored 16 KB pages. |
 | 13 | Planar 64 KB | Serves the full 64 KB address space linearly. |
-| 14 | Manbow2 | Uses Manbow2/Konami SCC banking plus the AM29F040B flash state machine and volatile writable sector backing. SCC audio remains disabled in FM-PAC mode. |
+| 14 | Manbow2 | Not supported for FM-PAC/MSX-MUSIC builds. |
 
 For unmapped subslots or unsupported windows, reads return `0xFF`.
-
----
-
-## Manbow2 details in FM-PAC mode
-
-Manbow2 requires extra handling because its mapper includes flash command emulation and a writable save sector. In FM-PAC mode, `loadrom_fmpac()` preserves that behavior:
-
-- Reserves the last 64 KB of the internal SRAM cache for the writable flash sector.
-- Initializes that SRAM sector from ROM offset `0x70000` when available.
-- Uses the existing Manbow2 flash command state machine for program, erase, auto-select, and reset handling.
-- Keeps SCC/SCC+ audio disabled, because the selected audio profile is MSX-MUSIC.
-
-This allows a Manbow2 mapper ROM to use FM-PAC/MSX-MUSIC while still retaining its mapper and save behavior.
 
 ---
 
@@ -362,7 +349,7 @@ This allows a Manbow2 mapper ROM to use FM-PAC/MSX-MUSIC while still retaining i
 - ROMs that directly write YM2413 ports `0x7C`/`0x7D` are supported.
 - ROMs that rely on MSX-MUSIC BIOS calls are supported by the embedded FM-PAC BIOS exposure.
 - ROMs that use FM-PAC memory-mapped OPLL registers `0x7FF4`/`0x7FF5` are routed to the same YM2413 emulator.
-- Konami SCC and Manbow2 mapper ROMs can use FM-PAC/MSX-MUSIC as long as SCC/SCC+ audio is not also requested.
+- Konami SCC and Manbow2 mapper ROMs are rejected for FM-PAC/MSX-MUSIC builds.
 - Audio is generated by the PicoVerse I2S DAC, not by the host MSX audio circuit.
 
 ---

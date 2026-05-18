@@ -190,7 +190,7 @@ The LoadROM tool targets situations where you want the PicoVerse to behave like 
       - Dual PSG emulation on secondary PSG ports `0x10`/`0x11` (only PicoVerse 2350, supported non-SYSTEM ROMs): `loadrom.exe -d \\path\\to\\Game.ROM` or `loadrom.exe --dual-psg -o mygame-dualpsg.uf2 \\path\\to\\Game.ROM`
       - `-scc` and `-sccplus` are mutually exclusive.
       - `-scc`, `-sccplus`, `-f` / `-fmpac`, and `-d` / `--dual-psg` are cartridge audio modes; use only one of them per UF2.
-      - `-f` / `-fmpac` is not valid with Sunrise or Carnivore2 system modes (`-s1`, `-m1`, `-s2`, `-m2`, `-c1`, or `-c2`). Konami SCC and Manbow2 mapper ROMs can use `-f` / `-fmpac`, but that selects MSX-MUSIC/FM-PAC instead of SCC/SCC+ audio emulation.
+      - `-f` / `-fmpac` is not valid with Sunrise or Carnivore2 system modes (`-s1`, `-m1`, `-s2`, `-m2`, `-c1`, or `-c2`) or with Konami SCC / Manbow2 mapper ROMs.
       - `-d` / `--dual-psg` is intended for software that writes to a second PSG. It is not available for Konami SCC or Manbow2 mapper ROMs, SCC/SCC+ audio builds, Sunrise/Nextor system modes, or Carnivore2 system modes.
       - Sunrise IDE standalone (PicoVerse 2040): `loadrom.exe -s`
       - Sunrise IDE + 192KB mapper (PicoVerse 2040): `loadrom.exe -m`

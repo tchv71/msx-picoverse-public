@@ -847,6 +847,11 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    if (msx_music && (rom_type == 3 || rom_type == ROM_TYPE_MANBOW2)) {
+        printf("Error: -f/-fmpac is not supported with Konami SCC or Manbow2 mapper ROMs.\n");
+        return 1;
+    }
+
     if (dual_psg) {
         rom_type |= ROM_TYPE_DUAL_PSG_FLAG;
         printf("Dual PSG Emulation: Enabled on I/O ports 0x10/0x11\n");
