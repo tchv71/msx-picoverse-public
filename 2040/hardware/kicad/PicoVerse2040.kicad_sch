@@ -1262,9 +1262,6 @@
 			(embedded_fonts no)
 		)
 		(symbol "Device:C"
-			(pin_numbers
-				(hide yes)
-			)
 			(pin_names
 				(offset 0.254)
 			)
@@ -10674,8 +10671,7 @@
 	)
 	(symbol
 		(lib_id "Device:C")
-		(at 73.66 149.86 0)
-		(mirror y)
+		(at 73.66 149.86 180)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -10685,7 +10681,7 @@
 		(dnp no)
 		(uuid "ad086a6d-ddad-4963-9f3f-4e264cb2f012")
 		(property "Reference" "C1"
-			(at 69.85 148.5899 0)
+			(at 69.85 151.1301 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -10696,7 +10692,7 @@
 			)
 		)
 		(property "Value" "0.1uF"
-			(at 69.85 151.1299 0)
+			(at 69.85 148.5901 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -10707,7 +10703,7 @@
 			)
 		)
 		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric_Pad1.08x0.95mm_HandSolder"
-			(at 72.6948 153.67 0)
+			(at 72.6948 146.05 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
