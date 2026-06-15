@@ -30,11 +30,11 @@ JOYSTICK_CONFIG := $(JOYSTICK_BUILD)/build.ninja
 TOOL_DIR := tool
 
 # CMake options
-CMAKE ?= c:/Users/Cristiano/.pico-sdk/cmake/v3.29.9/bin/cmake
+CMAKE ?= c:/Users/tchv7/.pico-sdk/cmake/v3.31.5/bin/cmake
 # Use Ninja on Windows to avoid NMake and missing MinGW make.
 ifeq ($(OS),Windows_NT)
 	CMAKE_GENERATOR ?= Ninja
-	CMAKE_MAKE_PROGRAM ?= C:/Users/Cristiano/.pico-sdk/ninja/v1.12.1/ninja.exe
+	CMAKE_MAKE_PROGRAM ?= C:/Users/tchv7/.pico-sdk/ninja/v1.12.1/ninja.exe
 	ifneq ($(wildcard C:/msys64/ucrt64/bin/python.exe),)
 		PYTHON3_EXECUTABLE ?= C:/msys64/ucrt64/bin/python.exe
 	endif

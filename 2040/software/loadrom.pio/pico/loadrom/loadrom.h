@@ -14,6 +14,8 @@
 #ifndef LOADROM_H
 #define LOADROM_H
 
+//#include "../../tool/src/nextor_sunrise.h"
+
 #define ROM_NAME_MAX    50       // Maximum length of the ROM name string
 #define ROM_RECORD_SIZE (ROM_NAME_MAX + 1 + (sizeof(uint32_t) * 2)) // Name + mapper type + size + offset
 #define CACHE_SIZE      196608   // 192 KB SRAM cache for ROM data
@@ -59,7 +61,7 @@
 #define PIN_IORQ   26   // /IORQ — active-low I/O request
 #define PIN_SLTSL  27   // /SLTSL — active-low slot select
 #define PIN_WAIT    28  // /WAIT — active-low, driven by PIO side-set
-#define PIN_BUSSDIR 29  // BUSSDIR — bus direction control
+#define PIN_BUSDIR 29  // BUSSDIR — bus direction control
 
 // -----------------------------------------------------------------------
 // ROM storage
@@ -85,6 +87,8 @@ static union {
 static uint32_t active_rom_size = 0;
 
 // Pointer to the ROM data in flash (right after the program binary)
-const uint8_t *rom = (const uint8_t *)&__flash_binary_end;
+extern const unsigned char ___nextor_kernel_Nextor_2_1_4_SunriseIDE_MasterOnly_ROM[];
+
+#define rom  (const uint8_t *)___nextor_kernel_Nextor_2_1_4_SunriseIDE_MasterOnly_ROM//&__flash_binary_end;
 
 #endif

@@ -51,6 +51,7 @@ wait_iorq:
     wait 0 gpio 26     side 1     ; Wait for /IORQ=0. /WAIT released.
     jmp pin wait_iorq   side 1     ; If /RD=1 (no read), loop back
     nop                 side 0     ; Assert /WAIT=0 immediately to freeze Z80
+    set pins, 0         side 0
     in pins, 16         side 0     ; Capture A0..A15 into ISR
     push block          side 0     ; Send address to CPU via RX FIFO
     pull block          side 0     ; Stall until CPU responds (Z80 frozen)
@@ -58,6 +59,7 @@ wait_iorq:
     out pindirs, 8      side 0     ; Set pindirs (0xFF = output)
     nop                 side 1 [1] ; Release /WAIT; data valid. 2-cycle hold.
     wait 1 gpio 24      side 1     ; Wait for /RD=1 (bus cycle complete)
+    set pins, 1         side 1
     set x, 0            side 1     ; Prepare zero
     mov osr, x          side 1     ; Load zero into OSR
     out pindirs, 8      side 1     ; Tri-state D0..D7
@@ -85,7 +87,7 @@ wait_iorq:
 wait_iorq:
     wait 0 gpio 26           ; Wait for /IORQ=0
     jmp pin wait_iorq         ; If /WR=1, loop back
-    nop              [2]     ; Let address + data settle (3 cycles)
+    nop              [15]     ; Let address + data settle (3 cycles)
     mov isr, pins            ; Snapshot all GPIOs into ISR
     push block               ; Send (addr+data) to CPU via RX FIFO
     wait 1 gpio 25           ; Wait for /WR=1 (cycle complete)

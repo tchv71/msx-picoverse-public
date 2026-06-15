@@ -47,7 +47,7 @@
 #define PIN_IORQ   26   // /IORQ — active-low I/O request
 #define PIN_SLTSL  27   // /SLTSL — active-low slot select (unused by keyboard)
 #define PIN_WAIT   28   // /WAIT  — active-low, driven by PIO to freeze Z80 during I/O reads
-#define PIN_BUSSDIR 29  // BUSSDIR — bus direction control (unused by keyboard)
+#define PIN_BUSDIR 29  // BUSSDIR — bus direction control (unused by keyboard)
 
 #define PICO_FLASH_SPI_CLKDIV 2
 

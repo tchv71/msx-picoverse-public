@@ -53,11 +53,11 @@ MIDIPACBIN    := ../pico/midipac/dist/midipac.bin
 MIDIPACBIN_H  := $(SRCDIR)/midipac_fw.h
 
 # Helpers
-RM := rm -f
+RM := DEL /S /Q #rm -f
 
 .PHONY: all compile package clean
 
-all: clean compile package
+all: #compile #package
 
 compile: $(BINDIR)/$(OUTFILE)
 
@@ -99,6 +99,6 @@ $(DISDIR)/loadrom.exe: $(DISDIR) $(BINDIR)/$(OUTFILE)
 
 clean:
 	@echo "Cleaning ...."
-	$(RM) $(BINDIR)/*.exe $(BINDIR)/*.uf2 $(SRCDIR)/loadrom.h $(SRCDIR)/nextor_sunrise.h $(SRCDIR)/keyboard.h $(SRCDIR)/midi_fw.h $(SRCDIR)/midipac_fw.h
-	$(RM) $(DISDIR)/*
+	$(RM) $(BINDIR)\*.exe $(BINDIR)\*.uf2 $(SRCDIR)\loadrom.h $(SRCDIR)\nextor_sunrise.h $(SRCDIR)\keyboard.h $(SRCDIR)\midi_fw.h $(SRCDIR)\midipac_fw.h
+	$(RM) $(DISDIR)\*
 

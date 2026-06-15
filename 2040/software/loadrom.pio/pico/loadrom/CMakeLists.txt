@@ -33,8 +33,12 @@ pico_sdk_init()
 
 add_executable(loadrom 
     ${PICO_SDK_PATH}/lib/tinyusb/src/tusb.c
-    loadrom.c 
-    sunrise_ide.c )
+    loadrom.c
+    loop.cpp 
+    sunrise_ide.c
+    usb-descriptors.c
+    #usb_msc_driver.c
+)
 
 pico_generate_pio_header(loadrom ${CMAKE_CURRENT_LIST_DIR}/msx_bus.pio)
 
@@ -52,7 +56,9 @@ target_link_libraries(loadrom
         hardware_dma
         hardware_pio
         tinyusb_board
-        tinyusb_host)
+        tinyusb_host
+        tinyusb_device
+)
 
 # Add the standard include files to the build
 target_include_directories(loadrom PRIVATE
