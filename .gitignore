@@ -26,3 +26,4 @@ _autosave-*
 # Autorouter files (exported from Pcbnew)
 *.dsn
 *.ses
+2040/hardware/kicad/.history/
