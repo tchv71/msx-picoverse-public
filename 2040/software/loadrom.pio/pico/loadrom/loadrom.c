@@ -1668,7 +1668,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
     // Serve bootstrap ROM reads until the restart is detected.
     bool restart_detected = false;
     bool init_called = false;
-    if (0)
+    if (1)
     {
         init_called = restart_detected = true;
     }
@@ -1786,7 +1786,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
     //   page3 -> sub-slot0
     // Value: 0b00010000 = 0x10
     uint8_t subslot_reg = 0x10;
-
+ 
     while (true)
     {
         // --- Drain memory writes (Sunrise IDE + mapper RAM + sub-slot) ---
@@ -1795,20 +1795,20 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
             uint8_t wdata;
             while (pio_try_get_write(&waddr, &wdata))
             {
+                uint8_t page = (waddr >> 14) & 0x03u;
+                uint8_t active_subslot = (subslot_reg >> (page * 2)) & 0x03u;
                 // Sub-slot register write at 0xFFFF
                 if (waddr == 0xFFFFu)
                 {
                     subslot_reg = wdata;
                 }
-                else if (waddr == FT245R)
+                else if (waddr == FT245R && active_subslot==2)
                 {
                     putSerial(wdata);
                 }
                 // Determine sub-slot for this write address
                 else
                 {
-                    uint8_t page = (waddr >> 14) & 0x03u;
-                    uint8_t active_subslot = (subslot_reg >> (page * 2)) & 0x03u;
 
                     if (active_subslot == 0)
                     {
@@ -1923,6 +1923,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
         // --- Handle memory reads ---
         if (!pio_sm_is_rx_fifo_empty(msx_bus.pio, msx_bus.sm_read))
         {
+            extern bool bSerialEstablished;
             uint16_t addr = (uint16_t)pio_sm_get(msx_bus.pio, msx_bus.sm_read);
             uint8_t data = 0xFFu;
             bool in_window = false;
@@ -1943,14 +1944,22 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
                 in_window = true;
                 if (!isSerialIn(&data))
                     data = 0;
-                break;
             }
             else if (addr == FT245R + 1 && active_subslot == 2)
             {
                 in_window = true;
                 if (!tud_inited())
                     tud_init(0);
-                data = isSerialIn(NULL) ? 0 : (FT245R_RXEMPTY | FT245R_TXFULL);
+                bool bHasSymbol = isSerialIn(NULL);
+                if (!bHasSymbol)
+                {
+                    data = FT245R_RXEMPTY  |  (bSerialEstablished ? 0 : FT245R_TXFULL);
+                }
+                else
+                {
+                    data = 0;
+                    bSerialEstablished = true;
+                }
             }
             else
             {

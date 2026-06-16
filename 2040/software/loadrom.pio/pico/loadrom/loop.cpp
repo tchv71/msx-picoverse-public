@@ -73,7 +73,7 @@ static inline void cdc_write(const uint8_t *buf, size_t len)
   // loop over all mounted interfaces
   for (uint8_t idx = 0; idx < CFG_TUD_CDC; idx++)
   {
-    if (tud_cdc_n_connected(idx))
+    //if (tud_cdc_n_connected(idx))
     {
       // console --> cdc interfaces
       if (len)
