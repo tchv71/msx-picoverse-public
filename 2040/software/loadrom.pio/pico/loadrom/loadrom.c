@@ -1668,7 +1668,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
     // Serve bootstrap ROM reads until the restart is detected.
     bool restart_detected = false;
     bool init_called = false;
-    if (1)
+    if (0)
     {
         init_called = restart_detected = true;
     }

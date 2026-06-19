@@ -1,7 +1,7 @@
 #pragma once
 #include <stdint-gcc.h>
 
-static const uint16_t FT245R = 0x8000;//0xFFF8; //FT245R = 0x94u;
+static const uint16_t FT245R = 0xBFF8;//0xFFF8; //FT245R = 0x94u;
 static const uint8_t FT245R_RXEMPTY = 1; // MASK FOR RX BUFFER EMPTY
 static const uint8_t FT245R_TXFULL = 2; // MASK FOR TX BUFFER FULL
 
