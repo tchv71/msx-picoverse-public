@@ -105,11 +105,14 @@ void flushSerial()
     }
 }
 
-bool isSerialIn(uint8_t* pCh)
+bool __not_in_flash_func(bufIsEmpty)()
 {
-    if (bufIn.isEmpty())
-        return false;
-    if (pCh)
-        *pCh = bufIn.getByte();
-    return true;
+    return bufIn.isEmpty();
 }
+
+
+uint8_t __not_in_flash_func(bufGetByte)()
+{
+    return bufIn.getByte();
+}
+

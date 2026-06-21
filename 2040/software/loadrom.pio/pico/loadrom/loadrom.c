@@ -204,7 +204,7 @@ static void msx_pio_bus_init(void)
 
     // Set /WAIT pin HIGH in the PIO output register BEFORE switching mux.
     // This prevents a brief /WAIT=LOW glitch that would freeze the Z80.
-    pio_sm_set_pins_with_mask(msx_bus.pio, msx_bus.sm_read, (1u << PIN_WAIT) | (1u << PIN_BUSDIR), (1u << PIN_WAIT) | (1u << PIN_BUSDIR));
+    pio_sm_set_pins_with_mask(msx_bus.pio, msx_bus.sm_read, 1u << PIN_WAIT, 1u << PIN_WAIT);
 
     // Now hand /WAIT to PIO1 — the output register already has it HIGH
     pio_gpio_init(msx_bus.pio, PIN_WAIT);
@@ -281,7 +281,7 @@ static void msx_pio_io_bus_init(void)
 
     pio_sm_set_consecutive_pindirs(msx_io_bus.pio_read, msx_io_bus.sm_io_read, PIN_D0, 8, false);
     pio_gpio_init(msx_io_bus.pio_read, PIN_BUSDIR);
-    pio_sm_set_consecutive_pindirs(msx_io_bus.pio_read, msx_io_bus.sm_io_read, PIN_WAIT, 1, true);
+    pio_sm_set_consecutive_pindirs(msx_io_bus.pio_read, msx_io_bus.sm_io_read, PIN_WAIT, 2, true);
 
     pio_sm_set_enabled(msx_io_bus.pio_read, msx_io_bus.sm_io_read, true);
     pio_sm_set_enabled(msx_io_bus.pio_write, msx_io_bus.sm_io_write, true);
@@ -1802,7 +1802,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
                 {
                     subslot_reg = wdata;
                 }
-                else if (waddr == FT245R && active_subslot==2)
+                else if (waddr == FT245RM && active_subslot==FT245R_Subslot)
                 {
                     putSerial(wdata);
                 }
@@ -1872,9 +1872,9 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
                         pio_sm_put_blocking(msx_io_bus.pio_read, msx_io_bus.sm_io_read, pio_build_token(in_window, data));
                     }
                     break;
-                // case FT245R:
-                //     putSerial(io_data);
-                //     break;
+                case FT245R:
+                    putSerial(io_data);
+                    break;
                 default:
                     break;
                 }
@@ -1885,6 +1885,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
         // I/O ports are global (not slot-dependent), so the mapper must
         // always respond to FC-FF reads regardless of subslot selection.
         {
+            extern bool bSerialEstablished;
             uint16_t io_addr;
             while (pio_try_get_io_read(&io_addr))
             {
@@ -1892,29 +1893,36 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
                 bool in_window = false;
                 uint8_t data = 0xFFu;
                 uint32_t _add = 0;
-                switch (port)
+                if (port >= 0xFCu)
                 {
-                case 0xFCu:
-                case 0xFDu:
-                case 0xFEu:
-                case 0xFFu:
                     in_window = true;
                     data = (uint8_t)(0xF0u | (mapper_reg[port - 0xFCu] & 0x0Fu));
-                    break;
-                // case FT245R:
-                //     in_window = true;
-                //     if (!isSerialIn(&data))
-                //         data = 0;
-                //     break;
-                // case FT245R+1:
-                //     in_window = true;
-                //     if (!tud_inited())
-                //         tud_init(0);
-                //     _add = 1 << 16;
-                //     data = isSerialIn(NULL) ? 0 : FT245R_RXEMPTY;
-                //     break;
-                default:
-                    break;
+                }
+                else  if (port == FT245R)
+                {
+                    _add = 0x10000;
+                    in_window = true;
+                    if (!bufIsEmpty(&data))
+                        data = bufGetByte();
+                }
+                else if (port == FT245R+1)
+                {
+                    _add = 0x10000;
+                    in_window = true;
+                    if (!tud_inited())
+                         tud_init(0);
+                    //bool bHasSymbol = !bufIsEmpty();
+                    if (bufIsEmpty())
+                    {
+                        data = 1;
+                        if (!bSerialEstablished)
+                            data |= 2;
+                    }
+                    else
+                    {
+                        data = 0;
+                        bSerialEstablished = true;
+                    }
                 }
                 pio_sm_put_blocking(msx_io_bus.pio_read, msx_io_bus.sm_io_read, pio_build_token(in_window, data)+_add);
              }
@@ -1939,19 +1947,18 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
                 in_window = true;
                 data = ~subslot_reg;
             }
-            else if (addr == FT245R && active_subslot == 2)
+            else if (addr == FT245RM && active_subslot == FT245R_Subslot)
             {
                 in_window = true;
-                if (!isSerialIn(&data))
-                    data = 0;
+                data = bufIsEmpty() ? 0 : bufGetByte();
             }
-            else if (addr == FT245R + 1 && active_subslot == 2)
+            else if (addr == FT245RM + 1 && active_subslot == FT245R_Subslot)
             {
                 in_window = true;
                 if (!tud_inited())
                     tud_init(0);
-                bool bHasSymbol = isSerialIn(NULL);
-                if (!bHasSymbol)
+                bool bEmpty = bufIsEmpty();
+                if (bEmpty)
                 {
                     data = FT245R_RXEMPTY  |  (bSerialEstablished ? 0 : FT245R_TXFULL);
                 }
@@ -1960,6 +1967,11 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
                     data = 0;
                     bSerialEstablished = true;
                 }
+            }
+            else if (addr == FT245RM + 2 && active_subslot == FT245R_Subslot)
+            {
+                in_window = true;
+                data = FT245R_Magic;
             }
             else
             {

@@ -60,8 +60,8 @@
 #define PIN_WR     25   // /WR  — active-low write strobe
 #define PIN_IORQ   26   // /IORQ — active-low I/O request
 #define PIN_SLTSL  27   // /SLTSL — active-low slot select
-#define PIN_WAIT    28  // /WAIT — active-low, driven by PIO side-set
-#define PIN_BUSDIR 29  // BUSSDIR — bus direction control
+#define PIN_WAIT   28   // /WAIT — active-low, driven by PIO side-set
+#define PIN_BUSDIR 29   // BUSSDIR — bus direction control
 
 // -----------------------------------------------------------------------
 // ROM storage

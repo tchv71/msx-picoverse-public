@@ -73,7 +73,7 @@
 ; Autopush/autopull disabled. Shift directions set from C.
 
 .program msx_read_responder
-.side_set 1 opt
+.side_set 1 ;opt
 
 ; jmp_pin must be configured to /RD (GPIO 24) from C code.
 ; jmp pin jumps when the pin is HIGH (1). /RD is active-low:
@@ -87,7 +87,7 @@
 .wrap_target
 wait_sltsl:
     wait 0 gpio 27     side 1     ; Wait for /SLTSL=0 (slot selected). /WAIT released.
-    jmp pin wait_sltsl  side 1     ; If /RD=1 (no read), re-check /SLTSL
+    jmp pin wait_sltsl side 1     ; If /RD=1 (no read), re-check /SLTSL
     nop                side 0     ; Assert /WAIT=0 immediately to freeze Z80
     in pins, 16        side 0     ; Capture A0..A15 into ISR
     push block         side 0     ; Send address to CPU via RX FIFO
@@ -181,19 +181,46 @@ wait_iorq:
 ;   /RD=1 (inactive) → jump taken  → re-check /IORQ
 ;   /RD=0 (active)   → fall through → handle the read
 
+;.wrap_target
+;wait_iorq:
+;    wait 0 gpio 26                ; Wait for /IORQ=0 (I/O request)
+;    jmp pin wait_iorq             ; If /RD=1 (no read), re-check /IORQ
+;    nop                           ; timing spacer
+;    in pins, 16                   ; Capture A0..A15 into ISR
+;    push block                    ; Send address to CPU via RX FIFO
+;    pull block                    ; Wait for CPU response in TX FIFO (data token)
+;    out pins, 8                   ; Drive D0..D7 with data byte
+;    out pindirs, 8                ; Set pindirs (0xFF=output, 0x00=tristate)
+;    nop                    [1]    ; Data hold before /RD rises
+;    wait 1 gpio 24                ; Wait for /RD=1 (bus cycle ends)
+;    set x, 0                      ; Prepare zero for tri-state
+;    mov osr, x                    ; Load zero into OSR
+;    out pindirs, 8                ; Tri-state D0..D7 (pindirs=0x00)
+;.wrap
+.side_set 1; opt
+
+    set pindirs, 1      side 1
 .wrap_target
+    set pins, 1         side 1
 wait_iorq:
-    wait 0 gpio 26                ; Wait for /IORQ=0 (I/O request)
-    jmp pin wait_iorq             ; If /RD=1 (no read), re-check /IORQ
-    nop                           ; timing spacer
-    in pins, 16                   ; Capture A0..A15 into ISR
-    push block                    ; Send address to CPU via RX FIFO
-    pull block                    ; Wait for CPU response in TX FIFO (data token)
-    out pins, 8                   ; Drive D0..D7 with data byte
-    out pindirs, 8                ; Set pindirs (0xFF=output, 0x00=tristate)
-    nop                    [1]    ; Data hold before /RD rises
-    wait 1 gpio 24                ; Wait for /RD=1 (bus cycle ends)
-    set x, 0                      ; Prepare zero for tri-state
-    mov osr, x                    ; Load zero into OSR
-    out pindirs, 8                ; Tri-state D0..D7 (pindirs=0x00)
+    wait 0 gpio 26      side 1     ; Wait for /IORQ=0. /WAIT released.
+    jmp pin wait_iorq   side 1     ; If /RD=1 (no read), loop back
+    nop                 side 0     ; Assert /WAIT=0 immediately to freeze Z80
+    ;set pins, 0         side 0
+    in pins, 16         side 0     ; Capture A0..A15 into ISR
+    push block          side 0     ; Send address to CPU via RX FIFO
+    pull block          side 0     ; Stall until CPU responds (Z80 frozen)
+    out pins, 8         side 0     ; Drive D0..D7 with response byte
+    out pindirs, 8      side 0     ; Set pindirs (0xFF = output)
+    ;set pins, 0         side 0
+    mov x,osr           side 0
+    jmp !x, skip_busdir side 0
+    set pins, 0         side 0
+skip_busdir:
+    ;nop                 side 1 [1] ; Release /WAIT; data valid. 2-cycle hold.
+    ;wait 1 gpio 26      side 1     ; Wait for /IORQ=1. /WAIT released.
+    set x, 0            side 1     ; Prepare zero
+    wait 1 gpio 24      side 1     ; Wait for /RD=1 (bus cycle complete)
+    mov osr, x          side 1     ; Load zero into OSR
+    out pindirs, 8      side 1     ; Tri-state D0..D7
 .wrap
