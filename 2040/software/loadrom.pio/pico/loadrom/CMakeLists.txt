@@ -41,6 +41,7 @@ add_executable(loadrom
 )
 
 pico_generate_pio_header(loadrom ${CMAKE_CURRENT_LIST_DIR}/msx_bus.pio)
+pico_generate_pio_header(loadrom ${CMAKE_CURRENT_LIST_DIR}/msx_bus2.pio)
 
 pico_set_program_name(loadrom "loadrom")
 pico_set_program_version(loadrom "1.0")

@@ -26,7 +26,12 @@
 #include "../../tool/src/nextor_sunrise.h"
 #include "loadrom.h"
 #include "sunrise_ide.h"
+//#define MUX_ADDR
+#ifdef MUX_ADDR
+#include "msx_bus2.pio.h"
+#else
 #include "msx_bus.pio.h"
+#endif
 #include "loop.h"
 #include "tusb_config.h"
 #include "tusb.h"
@@ -76,7 +81,9 @@ static inline void __not_in_flash_func(prepare_rom_source)(
     bool cache_enable,
     uint32_t preferred_size,
     const uint8_t **rom_base_out,
-    uint32_t *available_length_out)
+    uint32_t *available_length_out,
+    bool bWait
+)
 {
     const uint8_t *rom_base = rom + offset;
     uint32_t available_length = active_rom_size;
@@ -113,7 +120,7 @@ static inline void __not_in_flash_func(prepare_rom_source)(
             true);                           // start immediately
         dma_channel_wait_for_finish_blocking(dma_chan);
         dma_channel_unclaim(dma_chan);
-        gpio_put(PIN_WAIT, 1);
+        if (bWait) gpio_put(PIN_WAIT, 1);
 
         rom_cached_size = bytes_to_cache;
 
@@ -146,7 +153,9 @@ static inline void setup_gpio(void)
         gpio_init(pin);
         gpio_set_dir(pin, GPIO_IN);
     }
-
+#ifdef MUX_ADDR
+    gpio_init(PIN_A0); gpio_set_dir(PIN_A0, GPIO_IN);
+#endif
     // Data pins D0-D7 (will be managed by PIO)
     for (uint pin = PIN_D0; pin <= PIN_D7; ++pin)
     {
@@ -161,10 +170,12 @@ static inline void setup_gpio(void)
     //gpio_init(PIN_BUSDIR);  gpio_put(PIN_BUSDIR, 1); gpio_set_dir(PIN_BUSDIR, GPIO_OUT);
 
 
+#if 0
     // /WAIT — start HIGH (released) so Z80 is not frozen during boot
     gpio_init(PIN_WAIT);
     gpio_set_dir(PIN_WAIT, GPIO_OUT);
     gpio_put(PIN_WAIT, 1);
+#endif
 }
 
 // -----------------------------------------------------------------------
@@ -197,7 +208,8 @@ static void msx_pio_bus_init(void)
     sm_config_set_out_pins(&cfg_read, PIN_D0, 8);
     sm_config_set_out_shift(&cfg_read, true, false, 32);
     sm_config_set_sideset_pins(&cfg_read, PIN_WAIT);
-    //sm_config_set_set_pins(&cfg_read, PIN_BUSDIR, 1);
+    // sm_config_set_set_pins(&cfg_read, PIN_A0, 1);
+
     sm_config_set_jmp_pin(&cfg_read, PIN_RD);
     sm_config_set_clkdiv(&cfg_read, 1.0f);
     pio_sm_init(msx_bus.pio, msx_bus.sm_read, msx_bus.offset_read, &cfg_read);
@@ -216,13 +228,18 @@ static void msx_pio_bus_init(void)
     sm_config_set_in_shift(&cfg_write, false, false, 32);
     sm_config_set_fifo_join(&cfg_write, PIO_FIFO_JOIN_RX);
     sm_config_set_jmp_pin(&cfg_write, PIN_WR);
+#ifdef MUX_ADDR    
+    sm_config_set_set_pins(&cfg_write, PIN_A0, 1);
+#endif
     sm_config_set_clkdiv(&cfg_write, 1.0f);
     pio_sm_init(msx_bus.pio, msx_bus.sm_write, msx_bus.offset_write, &cfg_write);
 
     // ----- Pin configuration for PIO -----
     pio_gpio_init(msx_bus.pio, PIN_WAIT);
-    //pio_gpio_init(msx_bus.pio, PIN_BUSDIR);
-    pio_sm_set_consecutive_pindirs(msx_bus.pio, msx_bus.sm_read, PIN_WAIT, 2, true);
+#ifdef MUX_ADDR    
+    pio_gpio_init(msx_bus.pio, PIN_A0);
+#endif
+    pio_sm_set_consecutive_pindirs(msx_bus.pio, msx_bus.sm_read, PIN_WAIT, 1, true);
 
     for (uint pin = PIN_D0; pin <= PIN_D7; ++pin)
     {
@@ -269,6 +286,9 @@ static void msx_pio_io_bus_init(void)
     sm_config_set_out_shift(&cfg_io_read, true, false, 32);
     sm_config_set_jmp_pin(&cfg_io_read, PIN_RD);
     sm_config_set_clkdiv(&cfg_io_read, 1.0f);
+#ifdef MUX_ADDR
+    pio_sm_set_pins_with_mask(msx_io_bus.pio_read, msx_io_bus.sm_io_read, 0, (1 << PIN_A0));
+#endif
     pio_sm_init(msx_io_bus.pio_read, msx_io_bus.sm_io_read, msx_io_bus.offset_io_read, &cfg_io_read);
 
     pio_sm_config cfg_io_write = msx_io_write_captor_program_get_default_config(msx_io_bus.offset_io_write);
@@ -276,6 +296,9 @@ static void msx_pio_io_bus_init(void)
     sm_config_set_in_shift(&cfg_io_write, false, false, 32);
     sm_config_set_fifo_join(&cfg_io_write, PIO_FIFO_JOIN_RX);
     sm_config_set_jmp_pin(&cfg_io_write, PIN_WR);
+#ifdef MUX_ADDR    
+    sm_config_set_set_pins(&cfg_io_write, PIN_A0, 1);
+#endif
     sm_config_set_clkdiv(&cfg_io_write, 1.0f);
     pio_sm_init(msx_io_bus.pio_write, msx_io_bus.sm_io_write, msx_io_bus.offset_io_write, &cfg_io_write);
 
@@ -550,7 +573,7 @@ void __no_inline_not_in_flash_func(loadrom_planar32)(uint32_t offset, bool cache
 {
     const uint8_t *rom_base;
     uint32_t available_length;
-    prepare_rom_source(offset, cache_enable, 32768u, &rom_base, &available_length);
+    prepare_rom_source(offset, cache_enable, 32768u, &rom_base, &available_length, true);
 
     msx_pio_bus_init();
 
@@ -573,7 +596,7 @@ void __no_inline_not_in_flash_func(loadrom_planar48)(uint32_t offset, bool cache
 {
     const uint8_t *rom_base;
     uint32_t available_length;
-    prepare_rom_source(offset, cache_enable, 49152u, &rom_base, &available_length);
+    prepare_rom_source(offset, cache_enable, 49152u, &rom_base, &available_length, true);
 
     msx_pio_bus_init();
 
@@ -596,7 +619,7 @@ void __no_inline_not_in_flash_func(loadrom_planar64)(uint32_t offset, bool cache
 {
     const uint8_t *rom_base;
     uint32_t available_length;
-    prepare_rom_source(offset, cache_enable, 65536u, &rom_base, &available_length);
+    prepare_rom_source(offset, cache_enable, 65536u, &rom_base, &available_length, true);
 
     msx_pio_bus_init();
 
@@ -624,7 +647,7 @@ void __no_inline_not_in_flash_func(loadrom_konamiscc)(uint32_t offset, bool cach
     uint8_t bank_registers[4] = {0, 1, 2, 3};
     const uint8_t *rom_base;
     uint32_t available_length;
-    prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length);
+    prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length, true);
 
     msx_pio_bus_init();
     banked8_loop(rom_base, available_length, bank_registers, handle_konamiscc_write);
@@ -796,7 +819,7 @@ void __no_inline_not_in_flash_func(loadrom_manbow2)(uint32_t offset, bool cache_
 
     // Temporarily reduce cache capacity so prepare_rom_source only uses 128KB
     rom_cache_capacity = reduced_cache;
-    prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length);
+    prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length, true);
 
     // Set up the writable SRAM area (last 64KB of sram_pool)
     uint8_t *writable_sram = &rom_sram[reduced_cache];
@@ -928,7 +951,7 @@ void __no_inline_not_in_flash_func(loadrom_konami)(uint32_t offset, bool cache_e
     uint8_t bank_registers[4] = {0, 1, 2, 3};
     const uint8_t *rom_base;
     uint32_t available_length;
-    prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length);
+    prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length, true);
 
     msx_pio_bus_init();
     banked8_loop(rom_base, available_length, bank_registers, handle_konami_write);
@@ -967,7 +990,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise)(uint32_t offset, bool cache_
 {
     const uint8_t *rom_base;
     uint32_t available_length;
-    prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length);
+    prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length, true);
 
     // Initialise Sunrise IDE state
     static sunrise_ide_t ide;
@@ -1048,7 +1071,7 @@ void __no_inline_not_in_flash_func(loadrom_ascii8)(uint32_t offset, bool cache_e
     uint8_t bank_registers[4] = {0, 1, 2, 3};
     const uint8_t *rom_base;
     uint32_t available_length;
-    prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length);
+    prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length, true);
 
     msx_pio_bus_init();
     banked8_loop(rom_base, available_length, bank_registers, handle_ascii8_write);
@@ -1064,7 +1087,7 @@ void __no_inline_not_in_flash_func(loadrom_ascii16)(uint32_t offset, bool cache_
     uint8_t bank_registers[2] = {0, 1};
     const uint8_t *rom_base;
     uint32_t available_length;
-    prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length);
+    prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length, true);
 
     msx_pio_bus_init();
 
@@ -1650,16 +1673,16 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
     // (forces cold-boot on MSX2+, showing RAM count) then restarts.
     // Matches the Carnivore2-style sequence used by multirom's menu.
     static const uint8_t bootstrap_rom[] = {
-        0x41, 0x42,            // 'AB' ROM header
-        0x0A, 0x40,            // INIT = 0x400A
-        0x00, 0x00,            // STATEMENT = none
-        0x00, 0x00,            // DEVICE = none
-        0x00, 0x00,            // TEXT = none
-        0xF3,                  // DI
-        0xDB, 0xF4,            // IN A, (0xF4)
-        0xF6, 0x80,            // OR 0x80       (set bit 7 → cold boot)
-        0xD3, 0xF4,            // OUT (0xF4), A
-        0xC7                   // RST 0x00      (cold restart)
+        0x41, 0x42,            // 'AB' ROM header                           ; 4000
+        0x0A, 0x40,            // INIT = 0x400A                             ; 4002
+        0x00, 0x00,            // STATEMENT = none                          ; 4004
+        0x00, 0x00,            // DEVICE = none                             ; 4006
+        0x00, 0x00,            // TEXT = none                               ; 4008
+        0xF3,                  // DI                                        ; 400A
+        0xDB, 0xF4,            // IN A, (0xF4)                              ; 400B
+        0xF6, 0x80,            // OR 0x80       (set bit 7 → cold boot)     ; 400D
+        0xD3, 0xF4,            // OUT (0xF4), A                             ; 400F
+        0xC7                   // RST 0x00      (cold restart)              ; 4011
     };
 
     // Start PIO memory bus so the MSX can discover the bootstrap ROM.
@@ -1668,7 +1691,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
     // Serve bootstrap ROM reads until the restart is detected.
     bool restart_detected = false;
     bool init_called = false;
-    if (0)
+    if (1)
     {
         init_called = restart_detected = true;
     }
@@ -1704,9 +1727,9 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
                 // Serve bootstrap ROM at 0x4000-0x7FFF
                 bool in_window = (addr >= 0x4000u && addr <= 0x7FFFu);
                 uint8_t data = 0xFFu;
+                uint32_t rel = addr - 0x4000u;
                 if (in_window)
                 {
-                    uint32_t rel = addr - 0x4000u;
                     if (rel < sizeof(bootstrap_rom))
                         data = bootstrap_rom[rel];
                 }
@@ -1742,7 +1765,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
 
     const uint8_t *rom_base;
     uint32_t available_length;
-    prepare_rom_source(offset, false, 0u, &rom_base, &available_length);
+    prepare_rom_source(offset, false, 0u, &rom_base, &available_length, false);
 
     // Initialise Sunrise IDE state
     static sunrise_ide_t ide;
@@ -1785,7 +1808,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
     //   page2 -> sub-slot1 (mapper RAM, probe target at 0x8000)
     //   page3 -> sub-slot0
     // Value: 0b00010000 = 0x10
-    uint8_t subslot_reg = 0x10;
+    static uint8_t subslot_reg = 0x10;
  
     while (true)
     {
@@ -2033,6 +2056,12 @@ int __no_inline_not_in_flash_func(main)()
 {
     // Set system clock to 250MHz for maximum headroom
     set_sys_clock_khz(250000, true);
+
+    // /WAIT — start HIGH (released) so Z80 is not frozen during boot
+    gpio_init(PIN_WAIT);
+    gpio_set_dir(PIN_WAIT, GPIO_OUT);
+    while (bufIsEmpty()) ;
+    gpio_put(PIN_WAIT, 0);
 
     //tuh_init(BOARD_TUH_RHPORT);
     //tud_init(0);
