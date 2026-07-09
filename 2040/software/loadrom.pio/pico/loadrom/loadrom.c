@@ -1,4 +1,4 @@
-// MSX PICOVERSE PROJECT
+﻿// MSX PICOVERSE PROJECT
 // (c) 2026 Cristiano Goncalves
 // The Retro Hacker
 //
@@ -120,7 +120,9 @@ static inline void __not_in_flash_func(prepare_rom_source)(
             true);                           // start immediately
         dma_channel_wait_for_finish_blocking(dma_chan);
         dma_channel_unclaim(dma_chan);
-        if (bWait) gpio_put(PIN_WAIT, 1);
+        
+        //if (bWait)
+         gpio_put(PIN_WAIT, 1);
 
         rom_cached_size = bytes_to_cache;
 
@@ -1793,6 +1795,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
 
     sunrise_ctx_t ctx = { .ide = &ide };
 
+    gpio_put(PIN_WAIT, 1);            // Assert not WAIT — free MSX bus
     // Main loop: service memory reads/writes and I/O reads/writes
     //
     // We must poll all four FIFOs continuously:
@@ -1970,71 +1973,68 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
                 in_window = true;
                 data = ~subslot_reg;
             }
-            else if (addr == FT245RM && active_subslot == FT245R_Subslot)
+            else if (active_subslot == FT245R_Subslot)
             {
-                in_window = true;
-                data = bufIsEmpty() ? 0 : bufGetByte();
-            }
-            else if (addr == FT245RM + 1 && active_subslot == FT245R_Subslot)
-            {
-                in_window = true;
-                if (!tud_inited())
-                    tud_init(0);
-                bool bEmpty = bufIsEmpty();
-                if (bEmpty)
+                if (addr == FT245RM)
                 {
-                    data = FT245R_RXEMPTY  |  (bSerialEstablished ? 0 : FT245R_TXFULL);
+                    in_window = true;
+                    data = bufIsEmpty() ? 0 : bufGetByte();
                 }
-                else
+                else if (addr == FT245RM + 1)
                 {
-                    data = 0;
-                    bSerialEstablished = true;
-                }
-            }
-            else if (addr == FT245RM + 2 && active_subslot == FT245R_Subslot)
-            {
-                in_window = true;
-                data = FT245R_Magic;
-            }
-            else
-            {
-                //uint8_t page = (addr >> 14) & 0x03u;
-                //uint8_t active_subslot = (subslot_reg >> (page * 2)) & 0x03u;
-
-                if (active_subslot == 0)
-                {
-                    // Sub-slot 0: Nextor ROM (0x4000-0x7FFF only)
-                    if (addr >= 0x4000u && addr <= 0x7FFFu)
+                    in_window = true;
+                    if (!tud_inited())
+                        tud_init(0);
+                    bool bEmpty = bufIsEmpty();
+                    if (bEmpty)
                     {
-                        in_window = true;
-
-                        // Check if IDE intercepts this read
-                        uint8_t ide_data;
-                        if (sunrise_ide_handle_read(&ide, addr, &ide_data))
-                        {
-                            data = ide_data;
-                        }
-                        else
-                        {
-                            // Sunrise mapper: page selected by ide.segment
-                            uint8_t seg = ide.segment;
-                            uint32_t rel = ((uint32_t)seg << 14) + (addr & 0x3FFFu);
-                            if (available_length == 0u || rel < available_length)
-                                data = read_rom_byte(rom_base, rel);
-                        }
+                        data = FT245R_RXEMPTY | (bSerialEstablished ? 0 : FT245R_TXFULL);
+                    }
+                    else
+                    {
+                        data = 0;
+                        bSerialEstablished = true;
                     }
                 }
-                else if (active_subslot == 1)
+                else if (addr == FT245RM + 2)
                 {
-                    // Sub-slot 1: Memory mapper RAM — all 4 pages
                     in_window = true;
-                    uint8_t mapper_page = mapper_page_from_reg(mapper_reg[page]);
-                    uint32_t mapper_offset = ((uint32_t)mapper_page << 14) | (addr & 0x3FFFu);
-                    data = mapper_ram[mapper_offset];
+                    data = FT245R_Magic;
                 }
-                // Sub-slots 2 and 3: unused, return 0xFF (not in window)
             }
+            else if (active_subslot == 0)
+            {
+                // Sub-slot 0: Nextor ROM (0x4000-0x7FFF only)
+                if (addr >= 0x4000u && addr <= 0x7FFFu)
+                {
+                    in_window = true;
 
+                    // Check if IDE intercepts this read
+                    uint8_t ide_data;
+                    if (sunrise_ide_handle_read(&ide, addr, &ide_data))
+                    {
+                        data = ide_data;
+                    }
+                    else
+                    {
+                        // Sunrise mapper: page selected by ide.segment
+                        uint8_t seg = ide.segment;
+                        uint32_t rel = ((uint32_t)seg << 14) + (addr & 0x3FFFu);
+                        if (available_length == 0u || rel < available_length)
+                            data = read_rom_byte(rom_base, rel);
+                    }
+                }
+            }
+            else if (active_subslot == 1)
+            {
+                // Sub-slot 1: Memory mapper RAM — all 4 pages
+                in_window = true;
+                uint8_t mapper_page = mapper_page_from_reg(mapper_reg[page]);
+                uint32_t mapper_offset = ((uint32_t)mapper_page << 14) | (addr & 0x3FFFu);
+                data = mapper_ram[mapper_offset];
+            }
+            // Sub-slots 2 and 3: unused, return 0xFF (not in window)
+ 
             pio_sm_put_blocking(msx_bus.pio, msx_bus.sm_read, pio_build_token(in_window, data));
         }
         getSerial();
@@ -2049,10 +2049,18 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
 {
 }
 
+
+int Start();
+int main()
+{
+    Start();
+    return 0;
+}
+
 // -----------------------------------------------------------------------
 // Main program
 // -----------------------------------------------------------------------
-int __no_inline_not_in_flash_func(main)()
+int Start()
 {
     // Set system clock to 250MHz for maximum headroom
     set_sys_clock_khz(250000, true);
@@ -2060,8 +2068,8 @@ int __no_inline_not_in_flash_func(main)()
     // /WAIT — start HIGH (released) so Z80 is not frozen during boot
     gpio_init(PIN_WAIT);
     gpio_set_dir(PIN_WAIT, GPIO_OUT);
-    while (bufIsEmpty()) ;
-    gpio_put(PIN_WAIT, 0);
+    //__breakpoint();//while (bufIsEmpty()) ;
+    gpio_put(PIN_WAIT, 1);
 
     //tuh_init(BOARD_TUH_RHPORT);
     //tud_init(0);
