@@ -228,6 +228,7 @@ static void msx_pio_bus_init(void)
     pio_sm_config cfg_write = msx_write_captor_program_get_default_config(msx_bus.offset_write);
     sm_config_set_in_pins(&cfg_write, PIN_A0);
     sm_config_set_in_shift(&cfg_write, false, false, 32);
+    sm_config_set_out_shift(&cfg_write, true, false, 32);
     sm_config_set_fifo_join(&cfg_write, PIO_FIFO_JOIN_RX);
     sm_config_set_jmp_pin(&cfg_write, PIN_WR);
 #ifdef MUX_ADDR    
@@ -296,6 +297,7 @@ static void msx_pio_io_bus_init(void)
     pio_sm_config cfg_io_write = msx_io_write_captor_program_get_default_config(msx_io_bus.offset_io_write);
     sm_config_set_in_pins(&cfg_io_write, PIN_A0);
     sm_config_set_in_shift(&cfg_io_write, false, false, 32);
+    sm_config_set_out_shift(&cfg_io_write, true, false, 32);
     sm_config_set_fifo_join(&cfg_io_write, PIO_FIFO_JOIN_RX);
     sm_config_set_jmp_pin(&cfg_io_write, PIN_WR);
 #ifdef MUX_ADDR    
@@ -1812,6 +1814,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
     //   page3 -> sub-slot0
     // Value: 0b00010000 = 0x10
     static uint8_t subslot_reg = 0x10;
+    static uint8_t slot_reg = 0;
  
     while (true)
     {
@@ -1872,6 +1875,9 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
                 case 0xFEu:
                 case 0xFFu:
                     mapper_reg[port - 0xFCu] = io_data & 0x0Fu;
+                    break;
+                case 0xA8u:
+                    slot_reg = io_data;
                     break;
                 case 0xAAu:
                     // Keyboard support
