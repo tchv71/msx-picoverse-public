@@ -186,7 +186,7 @@ static inline void setup_gpio(void)
 static void msx_pio_bus_init(void)
 {
     msx_bus.pio = pio0;
-    msx_bus.sm_read  = 0;
+    msx_bus.sm_read  = 2;
     msx_bus.sm_write = 1;
 
     if (!msx_bus_programs_loaded)
@@ -261,7 +261,7 @@ static void msx_pio_bus_init(void)
 // -----------------------------------------------------------------------
 static void msx_pio_io_bus_init(void)
 {
-    msx_io_bus.pio_read = pio1;//pio0;
+    msx_io_bus.pio_read = pio1;
     msx_io_bus.pio_write = pio1;
     msx_io_bus.sm_io_read  = 0;//2;
     msx_io_bus.sm_io_write = 1;
@@ -1955,6 +1955,12 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
                         data = 0;
                         bSerialEstablished = true;
                     }
+                }
+                else if (port == FT245R+2)
+                {
+                    _add = 0x10000;
+                    in_window = true;
+                    data = FT245R_Magic;
                 }
                 pio_sm_put_blocking(msx_io_bus.pio_read, msx_io_bus.sm_io_read, pio_build_token(in_window, data)+_add);
              }
