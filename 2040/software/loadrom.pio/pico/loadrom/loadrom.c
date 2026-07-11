@@ -47,7 +47,7 @@ typedef struct {
     uint offset_write;
 } msx_pio_bus_t;
 
-msx_pio_bus_t msx_bus;
+static msx_pio_bus_t msx_bus;
 static uint32_t rom_cached_size = 0;
 static bool msx_bus_programs_loaded = false;
 
@@ -120,9 +120,7 @@ static inline void __not_in_flash_func(prepare_rom_source)(
             true);                           // start immediately
         dma_channel_wait_for_finish_blocking(dma_chan);
         dma_channel_unclaim(dma_chan);
-        
-        //if (bWait)
-         gpio_put(PIN_WAIT, 1);
+        gpio_set_dir(PIN_WAIT, GPIO_IN);
 
         rom_cached_size = bytes_to_cache;
 
@@ -169,15 +167,7 @@ static inline void setup_gpio(void)
     gpio_init(PIN_WR);      gpio_set_dir(PIN_WR, GPIO_IN);
     gpio_init(PIN_IORQ);    gpio_set_dir(PIN_IORQ, GPIO_IN);
     gpio_init(PIN_SLTSL);   gpio_set_dir(PIN_SLTSL, GPIO_IN);
-    //gpio_init(PIN_BUSDIR);  gpio_put(PIN_BUSDIR, 1); gpio_set_dir(PIN_BUSDIR, GPIO_OUT);
-
-
-#if 0
-    // /WAIT — start HIGH (released) so Z80 is not frozen during boot
-    gpio_init(PIN_WAIT);
-    gpio_set_dir(PIN_WAIT, GPIO_OUT);
-    gpio_put(PIN_WAIT, 1);
-#endif
+    gpio_init(PIN_BUSDIR);  gpio_set_dir(PIN_BUSDIR, GPIO_IN);
 }
 
 // -----------------------------------------------------------------------
@@ -238,6 +228,7 @@ static void msx_pio_bus_init(void)
     pio_sm_init(msx_bus.pio, msx_bus.sm_write, msx_bus.offset_write, &cfg_write);
 
     // ----- Pin configuration for PIO -----
+    pio_sm_set_pins_with_mask(msx_bus.pio, msx_bus.sm_read, 0u, (1u << PIN_WAIT));
     pio_gpio_init(msx_bus.pio, PIN_WAIT);
 #ifdef MUX_ADDR    
     pio_gpio_init(msx_bus.pio, PIN_A0);
@@ -251,7 +242,6 @@ static void msx_pio_bus_init(void)
     pio_sm_set_consecutive_pindirs(msx_bus.pio, msx_bus.sm_read, PIN_D0, 8, false);
     pio_sm_set_consecutive_pindirs(msx_bus.pio, msx_bus.sm_write, PIN_D0, 8, false);
 
- 
     pio_sm_set_enabled(msx_bus.pio, msx_bus.sm_read, true);
     pio_sm_set_enabled(msx_bus.pio, msx_bus.sm_write, true);
 }
@@ -327,7 +317,7 @@ static inline uint8_t __not_in_flash_func(read_rom_byte)(const uint8_t *rom_base
 // Build a 16-bit token to send back to the read SM via TX FIFO.
 //   bits[7:0]  = data byte
 //   bits[15:8] = pindirs mask (0xFF = drive bus, 0x00 = tri-state)
-/* static inline  */uint16_t __not_in_flash_func(pio_build_token)(bool drive, uint8_t data)
+static inline uint16_t __not_in_flash_func(pio_build_token)(bool drive, uint8_t data)
 {
     uint8_t dir_mask = drive ? 0xFFu : 0x00u;
     return (uint16_t)data | ((uint16_t)dir_mask << 8);
@@ -335,7 +325,7 @@ static inline uint8_t __not_in_flash_func(read_rom_byte)(const uint8_t *rom_base
 
 // Try to consume a write event from the write captor FIFO.
 // Returns false if FIFO is empty.
-/* static inline  */bool __not_in_flash_func(pio_try_get_write)(uint16_t *addr_out, uint8_t *data_out)
+static inline bool __not_in_flash_func(pio_try_get_write)(uint16_t *addr_out, uint8_t *data_out)
 {
     if (pio_sm_is_rx_fifo_empty(msx_bus.pio, msx_bus.sm_write))
         return false;
@@ -1731,9 +1721,9 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
                 // Serve bootstrap ROM at 0x4000-0x7FFF
                 bool in_window = (addr >= 0x4000u && addr <= 0x7FFFu);
                 uint8_t data = 0xFFu;
-                uint32_t rel = addr - 0x4000u;
                 if (in_window)
                 {
+                    uint32_t rel = addr - 0x4000u;
                     if (rel < sizeof(bootstrap_rom))
                         data = bootstrap_rom[rel];
                 }
@@ -1782,6 +1772,15 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
     // Initialise mapper page registers (BIOS convention)
     uint8_t mapper_reg[4] = { 3, 2, 1, 0 };  // FC, FD, FE, FF
 
+    // Sub-slot register: bits [1:0]=page0, [3:2]=page1, [5:4]=page2, [7:6]=page3
+    // Boot mapping for Nextor MAP_INIT compatibility:
+    //   page0 -> sub-slot0
+    //   page1 -> sub-slot0 (Sunrise ROM/IDE)
+    //   page2 -> sub-slot1 (mapper RAM, probe target at 0x8000)
+    //   page3 -> sub-slot0
+    // Value: 0b00010000 = 0x10
+    uint8_t subslot_reg = 0x10;
+    static uint8_t slot_reg = 0;
 
     // Clear mapper RAM
     memset(mapper_ram, 0xFF, MAPPER_SIZE);
@@ -1805,17 +1804,6 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
     //   PIO0 SM1 RX (memory write) — handle Sunrise IDE writes + mapper RAM writes + sub-slot reg
     //   PIO1 SM0 RX (I/O read) — respond with mapper page register values
     //   PIO1 SM1 RX (I/O write) — update mapper page registers
-
-    // Sub-slot register: bits [1:0]=page0, [3:2]=page1, [5:4]=page2, [7:6]=page3
-    // Boot mapping for Nextor MAP_INIT compatibility:
-    //   page0 -> sub-slot0
-    //   page1 -> sub-slot0 (Sunrise ROM/IDE)
-    //   page2 -> sub-slot1 (mapper RAM, probe target at 0x8000)
-    //   page3 -> sub-slot0
-    // Value: 0b00010000 = 0x10
-    static uint8_t subslot_reg = 0x10;
-    static uint8_t slot_reg = 0;
- 
     while (true)
     {
         // --- Drain memory writes (Sunrise IDE + mapper RAM + sub-slot) ---
@@ -2072,7 +2060,7 @@ int main()
 // -----------------------------------------------------------------------
 // Main program
 // -----------------------------------------------------------------------
-int Start()
+int __no_inline_not_in_flash_func(Start)()
 {
     // Set system clock to 250MHz for maximum headroom
     set_sys_clock_khz(250000, true);
