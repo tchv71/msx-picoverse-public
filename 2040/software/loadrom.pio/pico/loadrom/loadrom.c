@@ -40,33 +40,27 @@
 // PIO bus context
 // -----------------------------------------------------------------------
 typedef struct {
-    PIO pio;
+    PIO pio_read;
+    PIO pio_write;
+    PIO pio_bus;
     uint sm_read;
     uint sm_write;
-    uint offset_read;
-    uint offset_write;
+    uint sm_bus_writer;
+    int offset_read;
+    int offset_write;
+    int offset_bus;
 } msx_pio_bus_t;
 
 static msx_pio_bus_t msx_bus;
 static uint32_t rom_cached_size = 0;
 static bool msx_bus_programs_loaded = false;
 
-// I/O bus context (PIO1) for memory mapper port access
-typedef struct {
-    PIO pio_read;
-    PIO pio_write;
-    uint sm_io_read;
-    uint sm_io_write;
-    uint offset_io_read;
-    uint offset_io_write;
-} msx_pio_io_bus_t;
-
-static msx_pio_io_bus_t msx_io_bus;
+static msx_pio_bus_t msx_io_bus;
 static bool msx_io_bus_programs_loaded = false;
 
 // Current cache capacity in bytes. Normal mode uses full rom_sram size,
 // mapper mode reduces this to 0 so mapper RAM can use full SRAM.
-/* static */ uint32_t rom_cache_capacity = CACHE_SIZE;
+static uint32_t rom_cache_capacity = CACHE_SIZE;
 
 // -----------------------------------------------------------------------
 // ROM source preparation (cache to SRAM, flash fallback for large ROMs)
@@ -81,9 +75,7 @@ static inline void __not_in_flash_func(prepare_rom_source)(
     bool cache_enable,
     uint32_t preferred_size,
     const uint8_t **rom_base_out,
-    uint32_t *available_length_out,
-    bool bWait
-)
+    uint32_t *available_length_out)
 {
     const uint8_t *rom_base = rom + offset;
     uint32_t available_length = active_rom_size;
@@ -170,49 +162,82 @@ static inline void setup_gpio(void)
     gpio_init(PIN_BUSDIR);  gpio_set_dir(PIN_BUSDIR, GPIO_IN);
 }
 
+static inline void reset_pio(PIO pio, uint sm)
+{
+    pio_sm_set_enabled(pio, sm, false);
+    pio_sm_clear_fifos(pio, sm);
+    pio_sm_restart(pio, sm);
+}
+
+static inline void put_bus_blocking(uint32_t token)
+{
+    //pio_sm_put_blocking(msx_bus.pio_read, msx_bus.sm_read, token);
+    pio_sm_put_blocking(msx_bus.pio_bus, msx_bus.sm_bus_writer, token);
+}
+
 // -----------------------------------------------------------------------
 // PIO bus initialisation
 // -----------------------------------------------------------------------
 static void msx_pio_bus_init(void)
 {
-    msx_bus.pio = pio0;
-    msx_bus.sm_read  = 2;
-    msx_bus.sm_write = 1;
+    msx_bus.pio_read  = pio0;
+    msx_bus.pio_bus = pio0;
+    msx_bus.pio_write = pio1;
+    msx_bus.sm_read  = 0;
+    msx_bus.sm_bus_writer = 1;
+    msx_bus.sm_write = 3;
 
     if (!msx_bus_programs_loaded)
     {
-        msx_bus.offset_read  = pio_add_program(msx_bus.pio, &msx_read_responder_program);
-        msx_bus.offset_write = pio_add_program(msx_bus.pio, &msx_write_captor_program);
+        if ((msx_bus.offset_read  = pio_add_program(msx_bus.pio_read, &msx_read_responder_program))<0)
+            panic("Failed to add program");
+        if ((msx_bus.offset_bus  = pio_add_program(msx_bus.pio_bus, &msx_bus_writer_program))<0)
+            panic("Failed to add program");
+        if ((msx_bus.offset_write = pio_add_program(msx_bus.pio_write, &msx_write_captor_program))<0)
+            panic("Failed to add program");
         msx_bus_programs_loaded = true;
     }
 
-    pio_sm_set_enabled(msx_bus.pio, msx_bus.sm_read, false);
-    pio_sm_set_enabled(msx_bus.pio, msx_bus.sm_write, false);
-    pio_sm_clear_fifos(msx_bus.pio, msx_bus.sm_read);
-    pio_sm_clear_fifos(msx_bus.pio, msx_bus.sm_write);
-    pio_sm_restart(msx_bus.pio, msx_bus.sm_read);
-    pio_sm_restart(msx_bus.pio, msx_bus.sm_write);
+    reset_pio(msx_bus.pio_read, msx_bus.sm_read);
+    reset_pio(msx_bus.pio_bus, msx_bus.sm_bus_writer);
+    reset_pio(msx_bus.pio_write, msx_bus.sm_write);
 
     // ----- Read responder SM (SM0) -----
     pio_sm_config cfg_read = msx_read_responder_program_get_default_config(msx_bus.offset_read);
     sm_config_set_in_pins(&cfg_read, PIN_A0);
     sm_config_set_in_shift(&cfg_read, false, false, 16);
-    sm_config_set_out_pins(&cfg_read, PIN_D0, 8);
+    //sm_config_set_out_pins(&cfg_read, PIN_D0, 8);
     sm_config_set_out_shift(&cfg_read, true, false, 32);
-    sm_config_set_sideset_pins(&cfg_read, PIN_WAIT);
-    // sm_config_set_set_pins(&cfg_read, PIN_A0, 1);
-
+    //sm_config_set_set_pins(&cfg_read, PIN_WAIT, 1);
     sm_config_set_jmp_pin(&cfg_read, PIN_RD);
     sm_config_set_clkdiv(&cfg_read, 1.0f);
-    pio_sm_init(msx_bus.pio, msx_bus.sm_read, msx_bus.offset_read, &cfg_read);
+    pio_sm_init(msx_bus.pio_read, msx_bus.sm_read, msx_bus.offset_read, &cfg_read);
 
-    // Set /WAIT pin HIGH in the PIO output register BEFORE switching mux.
-    // This prevents a brief /WAIT=LOW glitch that would freeze the Z80.
-    pio_sm_set_pins_with_mask(msx_bus.pio, msx_bus.sm_read, 1u << PIN_WAIT, 1u << PIN_WAIT);
+
+    // ----- Bus writer SM -----
+    pio_sm_config cfg_bus = msx_bus_writer_program_get_default_config(msx_bus.offset_bus);
+    sm_config_set_in_pins(&cfg_bus, PIN_A0);
+    sm_config_set_in_shift(&cfg_bus, false, false, 16);
+    sm_config_set_out_pins(&cfg_bus, PIN_D0, 8);
+    sm_config_set_out_shift(&cfg_bus, true, false, 32);
+    sm_config_set_set_pins(&cfg_bus, PIN_WAIT, 2);
+
+    //sm_config_set_jmp_pin(&cfg_bus, PIN_RD);
+    sm_config_set_clkdiv(&cfg_bus, 1.0f);
+    pio_sm_init(msx_bus.pio_bus, msx_bus.sm_bus_writer, msx_bus.offset_bus, &cfg_bus);
 
     // Now hand /WAIT to PIO1 — the output register already has it HIGH
-    pio_gpio_init(msx_bus.pio, PIN_WAIT);
-    pio_sm_set_consecutive_pindirs(msx_bus.pio, msx_bus.sm_read, PIN_WAIT, 2, true);
+#if 0
+    gpio_init(PIN_WAIT); gpio_set_dir(PIN_WAIT, true); gpio_put(PIN_WAIT, true);
+#else
+    pio_gpio_init(msx_bus.pio_bus, PIN_WAIT);
+    pio_gpio_init(msx_bus.pio_bus, PIN_BUSDIR);
+    pio_sm_set_consecutive_pindirs(msx_bus.pio_bus, msx_bus.sm_bus_writer, PIN_WAIT, 2, true);
+#endif
+    // Set /WAIT pin HIGH in the PIO output register BEFORE switching mux.
+    // This prevents a brief /WAIT=LOW glitch that would freeze the Z80.
+    pio_sm_set_pins_with_mask(msx_bus.pio_bus, msx_bus.sm_bus_writer, 1u << PIN_WAIT, 1u << PIN_WAIT);
+
 
     // ----- Write captor SM (SM1) -----
     pio_sm_config cfg_write = msx_write_captor_program_get_default_config(msx_bus.offset_write);
@@ -225,25 +250,24 @@ static void msx_pio_bus_init(void)
     sm_config_set_set_pins(&cfg_write, PIN_A0, 1);
 #endif
     sm_config_set_clkdiv(&cfg_write, 1.0f);
-    pio_sm_init(msx_bus.pio, msx_bus.sm_write, msx_bus.offset_write, &cfg_write);
+    pio_sm_init(msx_bus.pio_write, msx_bus.sm_write, msx_bus.offset_write, &cfg_write);
 
-    // ----- Pin configuration for PIO -----
-    pio_sm_set_pins_with_mask(msx_bus.pio, msx_bus.sm_read, 0u, (1u << PIN_WAIT));
-    pio_gpio_init(msx_bus.pio, PIN_WAIT);
 #ifdef MUX_ADDR    
     pio_gpio_init(msx_bus.pio, PIN_A0);
 #endif
-    pio_sm_set_consecutive_pindirs(msx_bus.pio, msx_bus.sm_read, PIN_WAIT, 1, true);
+    pio_sm_set_consecutive_pindirs(msx_bus.pio_bus, msx_bus.sm_bus_writer, PIN_WAIT, 1, true);
 
     for (uint pin = PIN_D0; pin <= PIN_D7; ++pin)
     {
-        pio_gpio_init(msx_bus.pio, pin);
+        pio_gpio_init(msx_bus.pio_read, pin);
     }
-    pio_sm_set_consecutive_pindirs(msx_bus.pio, msx_bus.sm_read, PIN_D0, 8, false);
-    pio_sm_set_consecutive_pindirs(msx_bus.pio, msx_bus.sm_write, PIN_D0, 8, false);
+    pio_sm_set_consecutive_pindirs(msx_bus.pio_read, msx_bus.sm_read, PIN_D0, 8, false);
+    pio_sm_set_consecutive_pindirs(msx_bus.pio_bus, msx_bus.sm_bus_writer, PIN_D0, 8, false);
+    pio_sm_set_consecutive_pindirs(msx_bus.pio_write, msx_bus.sm_write, PIN_D0, 8, false);
 
-    pio_sm_set_enabled(msx_bus.pio, msx_bus.sm_read, true);
-    pio_sm_set_enabled(msx_bus.pio, msx_bus.sm_write, true);
+    pio_sm_set_enabled(msx_bus.pio_read, msx_bus.sm_read, true);
+    pio_sm_set_enabled(msx_bus.pio_bus, msx_bus.sm_bus_writer, true);
+    pio_sm_set_enabled(msx_bus.pio_write, msx_bus.sm_write, true);
 }
 
 // -----------------------------------------------------------------------
@@ -251,40 +275,40 @@ static void msx_pio_bus_init(void)
 // -----------------------------------------------------------------------
 static void msx_pio_io_bus_init(void)
 {
-    msx_io_bus.pio_read = pio1;
+    msx_io_bus.pio_read  = pio0;
     msx_io_bus.pio_write = pio1;
-    msx_io_bus.sm_io_read  = 0;//2;
-    msx_io_bus.sm_io_write = 1;
+    msx_io_bus.sm_read  = 2;
+    msx_io_bus.sm_write = 1;
 
     if (!msx_io_bus_programs_loaded)
     {
-        msx_io_bus.offset_io_read = pio_add_program(msx_io_bus.pio_read, &msx_io_read_responder_program);
-        msx_io_bus.offset_io_write = pio_add_program(msx_io_bus.pio_write, &msx_io_write_captor_program);
+        if ((msx_io_bus.offset_read = pio_add_program(msx_io_bus.pio_read, &msx_io_read_responder_program))<0)
+            panic("Failed to add program");
+        if ((msx_io_bus.offset_write = pio_add_program(msx_io_bus.pio_write, &msx_io_write_captor_program))<0)
+            panic("Failed to add program");
         msx_io_bus_programs_loaded = true;
     }
 
-    pio_sm_set_enabled(msx_io_bus.pio_read, msx_io_bus.sm_io_read, false);
-    pio_sm_set_enabled(msx_io_bus.pio_write, msx_io_bus.sm_io_write, false);
-    pio_sm_clear_fifos(msx_io_bus.pio_read, msx_io_bus.sm_io_read);
-    pio_sm_clear_fifos(msx_io_bus.pio_write, msx_io_bus.sm_io_write);
-    pio_sm_restart(msx_io_bus.pio_read, msx_io_bus.sm_io_read);
-    pio_sm_restart(msx_io_bus.pio_write, msx_io_bus.sm_io_write);
+    reset_pio(msx_io_bus.pio_read, msx_io_bus.sm_read);
+    reset_pio(msx_io_bus.pio_write, msx_io_bus.sm_write);
 
-    pio_sm_config cfg_io_read = msx_io_read_responder_program_get_default_config(msx_io_bus.offset_io_read);
+    pio_sm_config cfg_io_read = msx_io_read_responder_program_get_default_config(msx_io_bus.offset_read);
     sm_config_set_in_pins(&cfg_io_read, PIN_A0);
     sm_config_set_in_shift(&cfg_io_read, false, false, 32);
-    sm_config_set_sideset_pins(&cfg_io_read, PIN_WAIT);
-    sm_config_set_set_pins(&cfg_io_read, PIN_BUSDIR, 1);
-    sm_config_set_out_pins(&cfg_io_read, PIN_D0, 8);
+#if 1
+    //sm_config_set_sideset_pins(&cfg_io_read, PIN_WAIT);
+    //sm_config_set_set_pins(&cfg_io_read, PIN_BUSDIR, 1);
+#endif
+    //sm_config_set_out_pins(&cfg_io_read, PIN_D0, 8);
     sm_config_set_out_shift(&cfg_io_read, true, false, 32);
     sm_config_set_jmp_pin(&cfg_io_read, PIN_RD);
     sm_config_set_clkdiv(&cfg_io_read, 1.0f);
 #ifdef MUX_ADDR
-    pio_sm_set_pins_with_mask(msx_io_bus.pio_read, msx_io_bus.sm_io_read, 0, (1 << PIN_A0));
+    pio_sm_set_pins_with_mask(msx_io_bus.pio_read, msx_io_bus.sm_read, 0, (1 << PIN_A0));
 #endif
-    pio_sm_init(msx_io_bus.pio_read, msx_io_bus.sm_io_read, msx_io_bus.offset_io_read, &cfg_io_read);
+    pio_sm_init(msx_io_bus.pio_read, msx_io_bus.sm_read, msx_io_bus.offset_read, &cfg_io_read);
 
-    pio_sm_config cfg_io_write = msx_io_write_captor_program_get_default_config(msx_io_bus.offset_io_write);
+    pio_sm_config cfg_io_write = msx_io_write_captor_program_get_default_config(msx_io_bus.offset_write);
     sm_config_set_in_pins(&cfg_io_write, PIN_A0);
     sm_config_set_in_shift(&cfg_io_write, false, false, 32);
     sm_config_set_out_shift(&cfg_io_write, true, false, 32);
@@ -294,14 +318,26 @@ static void msx_pio_io_bus_init(void)
     sm_config_set_set_pins(&cfg_io_write, PIN_A0, 1);
 #endif
     sm_config_set_clkdiv(&cfg_io_write, 1.0f);
-    pio_sm_init(msx_io_bus.pio_write, msx_io_bus.sm_io_write, msx_io_bus.offset_io_write, &cfg_io_write);
+    pio_sm_init(msx_io_bus.pio_write, msx_io_bus.sm_write, msx_io_bus.offset_write, &cfg_io_write);
 
-    pio_sm_set_consecutive_pindirs(msx_io_bus.pio_read, msx_io_bus.sm_io_read, PIN_D0, 8, false);
-    pio_gpio_init(msx_io_bus.pio_read, PIN_BUSDIR);
-    pio_sm_set_consecutive_pindirs(msx_io_bus.pio_read, msx_io_bus.sm_io_read, PIN_WAIT, 2, true);
+    pio_sm_set_consecutive_pindirs(msx_io_bus.pio_read, msx_io_bus.sm_read, PIN_D0, 8, false);
+#if 1
+    //pio_gpio_init(msx_io_bus.pio_read, PIN_WAIT);
+    //pio_gpio_init(msx_io_bus.pio_read, PIN_BUSDIR);
+    //pio_sm_set_consecutive_pindirs(msx_io_bus.pio_read, msx_io_bus.sm_read, PIN_WAIT, 2, true);
+#endif
 
-    pio_sm_set_enabled(msx_io_bus.pio_read, msx_io_bus.sm_io_read, true);
-    pio_sm_set_enabled(msx_io_bus.pio_write, msx_io_bus.sm_io_write, true);
+#if 0
+    for (uint pin = PIN_D0; pin <= PIN_D7; ++pin)
+    {
+        pio_gpio_init(msx_io_bus.pio_read, pin);
+    }
+#endif
+    pio_sm_set_consecutive_pindirs(msx_io_bus.pio_read, msx_io_bus.sm_read, PIN_D0, 8, false);
+    pio_sm_set_consecutive_pindirs(msx_io_bus.pio_write, msx_io_bus.sm_write, PIN_D0, 8, false);
+
+    pio_sm_set_enabled(msx_io_bus.pio_read, msx_io_bus.sm_read, true);
+    pio_sm_set_enabled(msx_io_bus.pio_write, msx_io_bus.sm_write, true);
 }
 
 // -----------------------------------------------------------------------
@@ -327,10 +363,10 @@ static inline uint16_t __not_in_flash_func(pio_build_token)(bool drive, uint8_t 
 // Returns false if FIFO is empty.
 static inline bool __not_in_flash_func(pio_try_get_write)(uint16_t *addr_out, uint8_t *data_out)
 {
-    if (pio_sm_is_rx_fifo_empty(msx_bus.pio, msx_bus.sm_write))
+    if (pio_sm_is_rx_fifo_empty(msx_bus.pio_write, msx_bus.sm_write))
         return false;
 
-    uint32_t sample = pio_sm_get(msx_bus.pio, msx_bus.sm_write);
+    uint32_t sample = pio_sm_get(msx_bus.pio_write, msx_bus.sm_write);
     *addr_out = (uint16_t)(sample & 0xFFFFu);
     *data_out = (uint8_t)((sample >> 16) & 0xFFu);
     return true;
@@ -351,10 +387,10 @@ static inline void __not_in_flash_func(pio_drain_writes)(void (*handler)(uint16_
 // Returns false if FIFO is empty.
 static inline bool __not_in_flash_func(pio_try_get_io_write)(uint16_t *addr_out, uint8_t *data_out)
 {
-    if (pio_sm_is_rx_fifo_empty(msx_io_bus.pio_write, msx_io_bus.sm_io_write))
+    if (pio_sm_is_rx_fifo_empty(msx_io_bus.pio_write, msx_io_bus.sm_write))
         return false;
 
-    uint32_t sample = pio_sm_get(msx_io_bus.pio_write, msx_io_bus.sm_io_write);
+    uint32_t sample = pio_sm_get(msx_io_bus.pio_write, msx_io_bus.sm_write);
     *addr_out = (uint16_t)(sample & 0xFFFFu);
     *data_out = (uint8_t)((sample >> 16) & 0xFFu);
     return true;
@@ -371,10 +407,10 @@ static inline uint8_t __not_in_flash_func(mapper_page_from_reg)(uint8_t reg)
 // Returns false if FIFO is empty.
 static inline bool __not_in_flash_func(pio_try_get_io_read)(uint16_t *addr_out)
 {
-    if (pio_sm_is_rx_fifo_empty(msx_io_bus.pio_read, msx_io_bus.sm_io_read))
+    if (pio_sm_is_rx_fifo_empty(msx_io_bus.pio_read, msx_io_bus.sm_read))
         return false;
 
-    *addr_out = (uint16_t)pio_sm_get(msx_io_bus.pio_read, msx_io_bus.sm_io_read);
+    *addr_out = (uint16_t)pio_sm_get(msx_io_bus.pio_read, msx_io_bus.sm_read);
     return true;
 }
 
@@ -519,6 +555,8 @@ static inline void __not_in_flash_func(handle_neo16_write)(uint16_t addr, uint8_
     }
 }
 
+
+
 // -----------------------------------------------------------------------
 // Generic banked ROM loop (8KB banks, 8-bit bank registers)
 // -----------------------------------------------------------------------
@@ -540,7 +578,7 @@ static void __no_inline_not_in_flash_func(banked8_loop)(
     {
         pio_drain_writes(write_handler, &ctx);
 
-        uint16_t addr = (uint16_t)pio_sm_get_blocking(msx_bus.pio, msx_bus.sm_read);
+        uint16_t addr = (uint16_t)pio_sm_get_blocking(msx_bus.pio_read, msx_bus.sm_read);
 
         pio_drain_writes(write_handler, &ctx);
 
@@ -554,9 +592,10 @@ static void __no_inline_not_in_flash_func(banked8_loop)(
                 data = read_rom_byte(rom_base, rel);
         }
 
-        pio_sm_put_blocking(msx_bus.pio, msx_bus.sm_read, pio_build_token(in_window, data));
+        put_bus_blocking(pio_build_token(in_window, data));
     }
 }
+
 
 // -----------------------------------------------------------------------
 // loadrom_planar32 - Planar 16/32KB ROM (no mapper)
@@ -567,18 +606,18 @@ void __no_inline_not_in_flash_func(loadrom_planar32)(uint32_t offset, bool cache
 {
     const uint8_t *rom_base;
     uint32_t available_length;
-    prepare_rom_source(offset, cache_enable, 32768u, &rom_base, &available_length, true);
+    prepare_rom_source(offset, cache_enable, 32768u, &rom_base, &available_length);
 
     msx_pio_bus_init();
 
     while (true)
     {
-        uint16_t addr = (uint16_t)pio_sm_get_blocking(msx_bus.pio, msx_bus.sm_read);
+        uint16_t addr = (uint16_t)pio_sm_get_blocking(msx_bus.pio_read, msx_bus.sm_read);
 
         bool in_window = (addr >= 0x4000u) && (addr <= 0xBFFFu);
         uint8_t data = in_window ? rom_base[addr - 0x4000u] : 0xFFu;
 
-        pio_sm_put_blocking(msx_bus.pio, msx_bus.sm_read, pio_build_token(in_window, data));
+        put_bus_blocking(pio_build_token(in_window, data));
     }
 }
 
@@ -590,18 +629,18 @@ void __no_inline_not_in_flash_func(loadrom_planar48)(uint32_t offset, bool cache
 {
     const uint8_t *rom_base;
     uint32_t available_length;
-    prepare_rom_source(offset, cache_enable, 49152u, &rom_base, &available_length, true);
+    prepare_rom_source(offset, cache_enable, 49152u, &rom_base, &available_length);
 
     msx_pio_bus_init();
 
     while (true)
     {
-        uint16_t addr = (uint16_t)pio_sm_get_blocking(msx_bus.pio, msx_bus.sm_read);
+        uint16_t addr = (uint16_t)pio_sm_get_blocking(msx_bus.pio_read, msx_bus.sm_read);
 
         bool in_window = (addr <= 0xBFFFu);
         uint8_t data = in_window ? rom_base[addr] : 0xFFu;
 
-        pio_sm_put_blocking(msx_bus.pio, msx_bus.sm_read, pio_build_token(in_window, data));
+        put_bus_blocking(pio_build_token(in_window, data));
     }
 }
 
@@ -613,13 +652,13 @@ void __no_inline_not_in_flash_func(loadrom_planar64)(uint32_t offset, bool cache
 {
     const uint8_t *rom_base;
     uint32_t available_length;
-    prepare_rom_source(offset, cache_enable, 65536u, &rom_base, &available_length, true);
+    prepare_rom_source(offset, cache_enable, 65536u, &rom_base, &available_length);
 
     msx_pio_bus_init();
 
     while (true)
     {
-        uint16_t addr = (uint16_t)pio_sm_get_blocking(msx_bus.pio, msx_bus.sm_read);
+        uint16_t addr = (uint16_t)pio_sm_get_blocking(msx_bus.pio_read, msx_bus.sm_read);
 
         bool in_window = true;
         uint8_t data = 0xFFu;
@@ -627,7 +666,7 @@ void __no_inline_not_in_flash_func(loadrom_planar64)(uint32_t offset, bool cache
         if (available_length == 0u || (uint32_t)addr < available_length)
             data = read_rom_byte(rom_base, (uint32_t)addr);
 
-        pio_sm_put_blocking(msx_bus.pio, msx_bus.sm_read, pio_build_token(in_window, data));
+        put_bus_blocking(pio_build_token(in_window, data));
     }
 }
 
@@ -641,7 +680,7 @@ void __no_inline_not_in_flash_func(loadrom_konamiscc)(uint32_t offset, bool cach
     uint8_t bank_registers[4] = {0, 1, 2, 3};
     const uint8_t *rom_base;
     uint32_t available_length;
-    prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length, true);
+    prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length);
 
     msx_pio_bus_init();
     banked8_loop(rom_base, available_length, bank_registers, handle_konamiscc_write);
@@ -813,7 +852,7 @@ void __no_inline_not_in_flash_func(loadrom_manbow2)(uint32_t offset, bool cache_
 
     // Temporarily reduce cache capacity so prepare_rom_source only uses 128KB
     rom_cache_capacity = reduced_cache;
-    prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length, true);
+    prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length);
 
     // Set up the writable SRAM area (last 64KB of sram_pool)
     uint8_t *writable_sram = &rom_sram[reduced_cache];
@@ -872,9 +911,9 @@ void __no_inline_not_in_flash_func(loadrom_manbow2)(uint32_t offset, bool cache_
             {
                 handle_manbow2_write(waddr, wdata, &mb);
             }
-            if (!pio_sm_is_rx_fifo_empty(msx_bus.pio, msx_bus.sm_read))
+            if (!pio_sm_is_rx_fifo_empty(msx_bus.pio_read, msx_bus.sm_read))
             {
-                addr = (uint16_t)pio_sm_get(msx_bus.pio, msx_bus.sm_read);
+                addr = (uint16_t)pio_sm_get(msx_bus.pio_read, msx_bus.sm_read);
                 break;
             }
         }
@@ -931,7 +970,7 @@ void __no_inline_not_in_flash_func(loadrom_manbow2)(uint32_t offset, bool cache_
             }
         }
 
-        pio_sm_put_blocking(msx_bus.pio, msx_bus.sm_read, pio_build_token(in_window, data));
+        put_bus_blocking(pio_build_token(in_window, data));
     }
 }
 
@@ -945,7 +984,7 @@ void __no_inline_not_in_flash_func(loadrom_konami)(uint32_t offset, bool cache_e
     uint8_t bank_registers[4] = {0, 1, 2, 3};
     const uint8_t *rom_base;
     uint32_t available_length;
-    prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length, true);
+    prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length);
 
     msx_pio_bus_init();
     banked8_loop(rom_base, available_length, bank_registers, handle_konami_write);
@@ -984,7 +1023,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise)(uint32_t offset, bool cache_
 {
     const uint8_t *rom_base;
     uint32_t available_length;
-    prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length, true);
+    prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length);
 
     // Initialise Sunrise IDE state
     static sunrise_ide_t ide;
@@ -1019,9 +1058,9 @@ void __no_inline_not_in_flash_func(loadrom_sunrise)(uint32_t offset, bool cache_
         while (true)
         {
             pio_drain_writes(handle_sunrise_write, &ctx);
-            if (!pio_sm_is_rx_fifo_empty(msx_bus.pio, msx_bus.sm_read))
+            if (!pio_sm_is_rx_fifo_empty(msx_bus.pio_read, msx_bus.sm_read))
             {
-                addr = (uint16_t)pio_sm_get(msx_bus.pio, msx_bus.sm_read);
+                addr = (uint16_t)pio_sm_get(msx_bus.pio_read, msx_bus.sm_read);
                 break;
             }
         }
@@ -1051,7 +1090,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise)(uint32_t offset, bool cache_
             }
         }
 
-        pio_sm_put_blocking(msx_bus.pio, msx_bus.sm_read, pio_build_token(in_window, data));
+        put_bus_blocking(pio_build_token(in_window, data));
     }
 }
 
@@ -1065,7 +1104,7 @@ void __no_inline_not_in_flash_func(loadrom_ascii8)(uint32_t offset, bool cache_e
     uint8_t bank_registers[4] = {0, 1, 2, 3};
     const uint8_t *rom_base;
     uint32_t available_length;
-    prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length, true);
+    prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length);
 
     msx_pio_bus_init();
     banked8_loop(rom_base, available_length, bank_registers, handle_ascii8_write);
@@ -1081,7 +1120,7 @@ void __no_inline_not_in_flash_func(loadrom_ascii16)(uint32_t offset, bool cache_
     uint8_t bank_registers[2] = {0, 1};
     const uint8_t *rom_base;
     uint32_t available_length;
-    prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length, true);
+    prepare_rom_source(offset, cache_enable, 0u, &rom_base, &available_length);
 
     msx_pio_bus_init();
 
@@ -1091,7 +1130,7 @@ void __no_inline_not_in_flash_func(loadrom_ascii16)(uint32_t offset, bool cache_
     {
         pio_drain_writes(handle_ascii16_write, &ctx);
 
-        uint16_t addr = (uint16_t)pio_sm_get_blocking(msx_bus.pio, msx_bus.sm_read);
+        uint16_t addr = (uint16_t)pio_sm_get_blocking(msx_bus.pio_read, msx_bus.sm_read);
 
         pio_drain_writes(handle_ascii16_write, &ctx);
 
@@ -1106,7 +1145,7 @@ void __no_inline_not_in_flash_func(loadrom_ascii16)(uint32_t offset, bool cache_
                 data = read_rom_byte(rom_base, rel);
         }
 
-        pio_sm_put_blocking(msx_bus.pio, msx_bus.sm_read, pio_build_token(in_window, data));
+        put_bus_blocking(pio_build_token(in_window, data));
     }
 }
 
@@ -1439,7 +1478,7 @@ void __no_inline_not_in_flash_func(loadrom_ascii16x)(uint32_t offset, bool cache
     {
         pio_drain_writes(handle_ascii16x_write_cached, &state);
 
-        uint16_t addr = (uint16_t)pio_sm_get_blocking(msx_bus.pio, msx_bus.sm_read);
+        uint16_t addr = (uint16_t)pio_sm_get_blocking(msx_bus.pio_read, msx_bus.sm_read);
 
         pio_drain_writes(handle_ascii16x_write_cached, &state);
 
@@ -1452,7 +1491,7 @@ void __no_inline_not_in_flash_func(loadrom_ascii16x)(uint32_t offset, bool cache
         if (slot >= 0)
             data = rom_sram[(uint32_t)slot * state.cache.slot_size + (addr & 0x3FFFu)];
 
-        pio_sm_put_blocking(msx_bus.pio, msx_bus.sm_read, pio_build_token(true, data));
+        put_bus_blocking(pio_build_token(true, data));
     }
 }
 
@@ -1545,7 +1584,7 @@ void __no_inline_not_in_flash_func(loadrom_neo8)(uint32_t offset)
     {
         pio_drain_writes(handle_neo8_write_cached, &state);
 
-        uint16_t addr = (uint16_t)pio_sm_get_blocking(msx_bus.pio, msx_bus.sm_read);
+        uint16_t addr = (uint16_t)pio_sm_get_blocking(msx_bus.pio_read, msx_bus.sm_read);
 
         pio_drain_writes(handle_neo8_write_cached, &state);
 
@@ -1563,7 +1602,7 @@ void __no_inline_not_in_flash_func(loadrom_neo8)(uint32_t offset)
             }
         }
 
-        pio_sm_put_blocking(msx_bus.pio, msx_bus.sm_read, pio_build_token(in_window, data));
+        put_bus_blocking(pio_build_token(in_window, data));
     }
 }
 
@@ -1592,7 +1631,7 @@ void __no_inline_not_in_flash_func(loadrom_neo16)(uint32_t offset)
     {
         pio_drain_writes(handle_neo16_write_cached, &state);
 
-        uint16_t addr = (uint16_t)pio_sm_get_blocking(msx_bus.pio, msx_bus.sm_read);
+        uint16_t addr = (uint16_t)pio_sm_get_blocking(msx_bus.pio_read, msx_bus.sm_read);
 
         pio_drain_writes(handle_neo16_write_cached, &state);
 
@@ -1610,7 +1649,7 @@ void __no_inline_not_in_flash_func(loadrom_neo16)(uint32_t offset)
             }
         }
 
-        pio_sm_put_blocking(msx_bus.pio, msx_bus.sm_read, pio_build_token(in_window, data));
+        put_bus_blocking(pio_build_token(in_window, data));
     }
 }
 
@@ -1699,17 +1738,17 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
             while (pio_try_get_write(&waddr, &wdata)) { }
         }
 
-        if (!pio_sm_is_rx_fifo_empty(msx_bus.pio, msx_bus.sm_read))
+        if (!pio_sm_is_rx_fifo_empty(msx_bus.pio_read, msx_bus.sm_read))
         {
-            uint16_t addr = (uint16_t)pio_sm_get(msx_bus.pio, msx_bus.sm_read);
+            uint16_t addr = (uint16_t)pio_sm_get(msx_bus.pio_read, msx_bus.sm_read);
 
             // After the bootstrap INIT has been called, addr 0x0000
             // via SLTSL means the BIOS is rescanning our slot during
             // the second boot (MSX2 path).
             if (init_called && addr == 0x0000u)
             {
-                pio_sm_put_blocking(msx_bus.pio, msx_bus.sm_read,
-                                    pio_build_token(false, 0xFFu));
+                put_bus_blocking(pio_build_token(false, 0xFFu));
+                //pio_sm_put_blocking(msx_bus.pio_read, msx_bus.sm_read, pio_build_token(false, 0xFFu));
                 restart_detected = true;
             }
             else
@@ -1727,8 +1766,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
                     if (rel < sizeof(bootstrap_rom))
                         data = bootstrap_rom[rel];
                 }
-                pio_sm_put_blocking(msx_bus.pio, msx_bus.sm_read,
-                                    pio_build_token(in_window, data));
+                put_bus_blocking(pio_build_token(in_window, data));
             }
         }
         else
@@ -1748,8 +1786,9 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
     // Phase 2 — Initialise the expanded-slot mapper.
     // The MSX just restarted — freeze it before the BIOS probes slots.
     // ---------------------------------------------------------------
-    pio_sm_set_enabled(pio0, 0, false);
-    pio_sm_set_enabled(pio0, 1, false);
+    pio_sm_set_enabled(msx_bus.pio_read, msx_bus.sm_read, false);
+    pio_sm_set_enabled(msx_bus.pio_write, msx_bus.sm_write, false);
+
     gpio_init(PIN_WAIT);
     gpio_set_dir(PIN_WAIT, GPIO_OUT);
     gpio_put(PIN_WAIT, 0);            // Assert WAIT — freeze MSX bus
@@ -1759,7 +1798,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
 
     const uint8_t *rom_base;
     uint32_t available_length;
-    prepare_rom_source(offset, false, 0u, &rom_base, &available_length, false);
+    prepare_rom_source(offset, false, 0u, &rom_base, &available_length);
 
     // Initialise Sunrise IDE state
     static sunrise_ide_t ide;
@@ -1785,6 +1824,11 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
     // Clear mapper RAM
     memset(mapper_ram, 0xFF, MAPPER_SIZE);
 
+#if 0
+    gpio_init(PIN_WAIT);
+    gpio_set_dir(PIN_WAIT, GPIO_OUT);
+    gpio_put(PIN_WAIT, 1); // Assert not WAIT — free MSX bus
+#endif
     // Initialise PIO I/O bus FIRST (mapper port handlers must be ready
     // before the memory bus releases WAIT and the BIOS starts probing).
     msx_pio_io_bus_init();
@@ -1792,11 +1836,18 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
     // Initialise PIO memory bus — this hands PIN_WAIT back to the PIO
     // read SM whose first instruction uses "side 1" (WAIT released),
     // so the MSX resumes execution with everything fully initialised.
+#if 1
     msx_pio_bus_init();
-
+#else
+    msx_bus.pio = pio0;
+    msx_bus.sm_read  = 0;
+ 
+    pio_sm_set_enabled(msx_bus.pio, msx_bus.sm_read, false);
+    pio_sm_set_pins_with_mask(msx_bus.pio, msx_bus.sm_read, 1u << PIN_WAIT, 1u << PIN_WAIT);
+    pio_sm_set_enabled(msx_bus.pio, msx_bus.sm_read, true);
+#endif
     sunrise_ctx_t ctx = { .ide = &ide };
 
-    gpio_put(PIN_WAIT, 1);            // Assert not WAIT — free MSX bus
     // Main loop: service memory reads/writes and I/O reads/writes
     //
     // We must poll all four FIFOs continuously:
@@ -1889,7 +1940,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
                             }
                         }
 
-                        pio_sm_put_blocking(msx_io_bus.pio_read, msx_io_bus.sm_io_read, pio_build_token(in_window, data));
+                        put_bus_blocking(pio_build_token(in_window, data));
                     }
                     break;
                 case FT245R:
@@ -1950,15 +2001,16 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
                     in_window = true;
                     data = FT245R_Magic;
                 }
-                pio_sm_put_blocking(msx_io_bus.pio_read, msx_io_bus.sm_io_read, pio_build_token(in_window, data)+_add);
+                //pio_sm_put_blocking(msx_io_bus.pio_read, msx_io_bus.sm_read, pio_build_token(in_window, data)+_add);
+                put_bus_blocking(pio_build_token(in_window, data));
              }
         }
 
         // --- Handle memory reads ---
-        if (!pio_sm_is_rx_fifo_empty(msx_bus.pio, msx_bus.sm_read))
+        if (!pio_sm_is_rx_fifo_empty(msx_bus.pio_read, msx_bus.sm_read))
         {
             extern bool bSerialEstablished;
-            uint16_t addr = (uint16_t)pio_sm_get(msx_bus.pio, msx_bus.sm_read);
+            uint16_t addr = (uint16_t)pio_sm_get(msx_bus.pio_read, msx_bus.sm_read);
             uint8_t data = 0xFFu;
             bool in_window = false;
             uint8_t page = (addr >> 14) & 0x03u;
@@ -2035,7 +2087,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
             }
             // Sub-slots 2 and 3: unused, return 0xFF (not in window)
  
-            pio_sm_put_blocking(msx_bus.pio, msx_bus.sm_read, pio_build_token(in_window, data));
+            put_bus_blocking(pio_build_token(in_window, data));
         }
         getSerial();
         flushSerial();
@@ -2062,14 +2114,8 @@ int main()
 // -----------------------------------------------------------------------
 int __no_inline_not_in_flash_func(Start)()
 {
-    // Set system clock to 250MHz for maximum headroom
-    set_sys_clock_khz(250000, true);
-
-    // /WAIT — start HIGH (released) so Z80 is not frozen during boot
-    gpio_init(PIN_WAIT);
-    gpio_set_dir(PIN_WAIT, GPIO_OUT);
-    //__breakpoint();//while (bufIsEmpty()) ;
-    gpio_put(PIN_WAIT, 1);
+    // Set system clock to 230MHz for ROM loading timing headroom
+    set_sys_clock_khz(230000, true);
 
     //tuh_init(BOARD_TUH_RHPORT);
     //tud_init(0);
