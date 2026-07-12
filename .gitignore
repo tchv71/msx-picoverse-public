@@ -29,3 +29,4 @@ _autosave-*
 2040/hardware/kicad/.history/
 2040/software/loadrom.pio/pico/loadrom/loadrom2.c
 2040/software/loadrom.pio/pico/loadrom/msx_bus_orig.pio
+2040/software/loadrom.pio/pico/loadrom/dist/loadrom.bin

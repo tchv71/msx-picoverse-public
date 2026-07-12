@@ -297,7 +297,7 @@ static void msx_pio_io_bus_init(void)
     sm_config_set_in_shift(&cfg_io_read, false, false, 32);
 #if 1
     //sm_config_set_sideset_pins(&cfg_io_read, PIN_WAIT);
-    //sm_config_set_set_pins(&cfg_io_read, PIN_BUSDIR, 1);
+    //sm_config_set_set_pins(&cfg_io_read, PIN_WAIT, 2);
 #endif
     //sm_config_set_out_pins(&cfg_io_read, PIN_D0, 8);
     sm_config_set_out_shift(&cfg_io_read, true, false, 32);
@@ -2002,7 +2002,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
                     data = FT245R_Magic;
                 }
                 //pio_sm_put_blocking(msx_io_bus.pio_read, msx_io_bus.sm_read, pio_build_token(in_window, data)+_add);
-                put_bus_blocking(pio_build_token(in_window, data));
+                put_bus_blocking(pio_build_token(in_window, data)+_add);
              }
         }
 

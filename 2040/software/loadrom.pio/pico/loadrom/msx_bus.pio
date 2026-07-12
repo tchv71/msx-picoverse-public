@@ -73,8 +73,6 @@
 ; Autopush/autopull disabled. Shift directions set from C.
 
 .program msx_read_responder
-;.side_set 1 ;opt
-
 ; jmp_pin must be configured to /RD (GPIO 24) from C code.
 ; jmp pin jumps when the pin is HIGH (1). /RD is active-low:
 ;   /RD=1 (inactive) → jump taken  → re-check /SLTSL
@@ -93,6 +91,8 @@ wait_sltsl:
     irq clear 4             ; Set PIN_WAIT=0 on msx_bus_writer SM
     in pins, 16             ; Capture A0..A15 into ISR
     push block              ; Send address to CPU via RX FIFO
+    ;pull block
+    ;irq clear 4
     wait 1 gpio 24          ; Wait for /RD=1 (bus cycle ends)
 .wrap
 
@@ -102,17 +102,20 @@ wait_sltsl:
 ; Writes byte from FIFO to data bus
 .program msx_bus_writer
 .wrap_target
+    set pins, 3
     mov osr, null
     out  pindirs, 8
     irq wait 4
-    set pins, 0
-    pull block                   ; Wait for CPU response in TX FIFO (data token)
     set pins, 2
+    pull block                   ; Wait for CPU response in TX FIFO (data token)
     out pins, 8                  ; Drive D0..D7 with data byte
     out pindirs, 8               ; Set pindirs (0xFF=output, 0x00=tristate)
-    set pins, 3                  ; Release /WAIT=1; data is now valid. 2-cycle hold.
+    set pins, 3                 ; Release /WAIT=1; data is now valid. 2-cycle hold.
+    mov x,osr           
+    jmp !x, skip_busdir 
+    set pins, 1        
+skip_busdir:
     wait 1 gpio 24               ; Wait for /RD=1 (bus cycle ends)
-    set pins, 1
 .wrap
 
 
@@ -140,7 +143,6 @@ wait_sltsl:
 wait_sltsl:
     wait 0 gpio 27           ; Wait for /SLTSL=0 (slot selected)
     jmp pin wait_sltsl        ; If /WR=1 (no write), re-check /SLTSL
-    ;nop              [2]     ; Let address + data settle (3 cycles)
     wait 1 gpio 25           ; Wait for /WR=1 (write cycle ends)
     mov isr, pins            ; Snapshot all GPIOs into ISR
     push block               ; Send (addr+data) to CPU via RX FIFO
@@ -195,13 +197,12 @@ wait_iorq:
 ; jmp_pin must be configured to /RD (GPIO 24) from C code.
 ;   /RD=1 (inactive) → jump taken  → re-check /IORQ
 ;   /RD=0 (active)   → fall through → handle the read
+
 .wrap_target
-    mov osr, null            ; Load zero into OSR
-    out pindirs, 8           ; Tri-state D0..D7
 wait_iorq:
     wait 0 gpio 26           ; Wait for /IORQ=0. /WAIT released.
     jmp pin wait_iorq        ; If /RD=1 (no read), loop back
-    irq clear 4              ; Set PIN_WAIT=0 on msx_bus_writer SM
+    irq clear 4
     in pins, 16              ; Capture A0..A15 into ISR
     push block               ; Send address to CPU via RX FIFO
     wait 1 gpio 24           ; Wait for /RD=1 (bus cycle complete)
