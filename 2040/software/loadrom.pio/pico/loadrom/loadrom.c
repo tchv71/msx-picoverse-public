@@ -1724,7 +1724,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
     // Serve bootstrap ROM reads until the restart is detected.
     bool restart_detected = false;
     bool init_called = false;
-    if (1)
+    if (0)
     {
         init_called = restart_detected = true;
     }
@@ -1976,18 +1976,16 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
                     if (!bufIsEmpty(&data))
                         data = bufGetByte();
                 }
-                else if (port == FT245R+1)
+                else if (port == FT245R + 1)
                 {
                     _add = 0x10000;
                     in_window = true;
                     if (!tud_inited())
-                         tud_init(0);
-                    //bool bHasSymbol = !bufIsEmpty();
-                    if (bufIsEmpty())
+                        tud_init(0);
+                    bool bEmpty = bufIsEmpty();
+                    if (bEmpty)
                     {
-                        data = 1;
-                        if (!bSerialEstablished)
-                            data |= 2;
+                        data = FT245R_RXEMPTY | (bSerialEstablished ? 0 : FT245R_TXFULL);
                     }
                     else
                     {
@@ -1995,7 +1993,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
                         bSerialEstablished = true;
                     }
                 }
-                else if (port == FT245R+2)
+                else if (port == FT245R + 2)
                 {
                     _add = 0x10000;
                     in_window = true;
