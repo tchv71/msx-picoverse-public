@@ -82,17 +82,13 @@
 ; had a race condition: after a write to our slot, SM0 would pass the
 ; /SLTSL wait but then respond to an unrelated /RD assertion.
 
- .wrap_target
-    mov osr, null           ; Load zero into OSR
-    out pindirs, 8          ; Tri-state D0..D7 (pindirs=0x00)
+.wrap_target
 wait_sltsl:
     wait 0 gpio 27          ; Wait for /SLTSL=0 (slot selected). /WAIT released.
     jmp pin wait_sltsl      ; If /RD=1 (no read), re-check /SLTSL
-    irq clear 4             ; Set PIN_WAIT=0 on msx_bus_writer SM
+    irq clear 0             ; Set PIN_WAIT=0 on msx_bus_writer SM
     in pins, 16             ; Capture A0..A15 into ISR
     push block              ; Send address to CPU via RX FIFO
-    ;pull block
-    ;irq clear 4
     wait 1 gpio 24          ; Wait for /RD=1 (bus cycle ends)
 .wrap
 
@@ -101,19 +97,17 @@ wait_sltsl:
 ; ===================================================================
 ; Writes byte from FIFO to data bus
 .program msx_bus_writer
+.side_set 2 opt
 .wrap_target
-    set pins, 3
-    mov osr, null
+    mov osr, null side 3         ; PIN_WAIT = 1 ; PIN_BUSDIR = 1
     out  pindirs, 8
-    irq wait 4
-    set pins, 2
-    pull block                   ; Wait for CPU response in TX FIFO (data token)
+    irq wait 0                   ; Wait for read command begins executing
+    pull block side 2            ; Wait for CPU response in TX FIFO (data token)
     out pins, 8                  ; Drive D0..D7 with data byte
     out pindirs, 8               ; Set pindirs (0xFF=output, 0x00=tristate)
-    set pins, 3                 ; Release /WAIT=1; data is now valid. 2-cycle hold.
-    mov x,osr           
+    mov x,osr  side 3            ; PIN_WAIT = 1 ; PIN_BUSDIR = 1         
     jmp !x, skip_busdir 
-    set pins, 1        
+    nop side 1                   ; PIN_WAIT = 1 ; PIN_BUSDIR = 0 (OUT)        
 skip_busdir:
     wait 1 gpio 24               ; Wait for /RD=1 (bus cycle ends)
 .wrap
@@ -202,7 +196,7 @@ wait_iorq:
 wait_iorq:
     wait 0 gpio 26           ; Wait for /IORQ=0. /WAIT released.
     jmp pin wait_iorq        ; If /RD=1 (no read), loop back
-    irq clear 4
+    irq clear 0
     in pins, 16              ; Capture A0..A15 into ISR
     push block               ; Send address to CPU via RX FIFO
     wait 1 gpio 24           ; Wait for /RD=1 (bus cycle complete)

@@ -146,7 +146,7 @@ static inline void setup_gpio(void)
         gpio_set_dir(pin, GPIO_IN);
     }
 #ifdef MUX_ADDR
-    gpio_init(PIN_A0); gpio_set_dir(PIN_A0, GPIO_IN);
+    gpio_init(PIN_A_HIGH); gpio_set_dir(PIN_A_HIGH, GPIO_OUT);
 #endif
     // Data pins D0-D7 (will be managed by PIO)
     for (uint pin = PIN_D0; pin <= PIN_D7; ++pin)
@@ -181,11 +181,11 @@ static inline void put_bus_blocking(uint32_t token)
 static void msx_pio_bus_init(void)
 {
     msx_bus.pio_read  = pio0;
-    msx_bus.pio_bus = pio0;
+    msx_bus.pio_bus   = pio0;
     msx_bus.pio_write = pio1;
-    msx_bus.sm_read  = 0;
+    msx_bus.sm_read       = 0;
     msx_bus.sm_bus_writer = 1;
-    msx_bus.sm_write = 3;
+    msx_bus.sm_write      = 3;
 
     if (!msx_bus_programs_loaded)
     {
@@ -202,12 +202,27 @@ static void msx_pio_bus_init(void)
     reset_pio(msx_bus.pio_bus, msx_bus.sm_bus_writer);
     reset_pio(msx_bus.pio_write, msx_bus.sm_write);
 
+#ifdef MUX_ADDR
+    pio_gpio_init(msx_bus.pio_read, PIN_A_HIGH);
+    pio_gpio_init(msx_bus.pio_write, PIN_A_HIGH2);
+    pio_sm_set_consecutive_pindirs(msx_bus.pio_read, msx_bus.sm_read, PIN_A_HIGH, 1, true);
+    pio_sm_set_consecutive_pindirs(msx_bus.pio_write, msx_bus.sm_write, PIN_A_HIGH2, 1, true);
+ 
+    pio_sm_set_pins_with_mask(msx_bus.pio_read, msx_bus.sm_read, 0/* (1 << PIN_A_HIGH) */, (1 << PIN_A_HIGH));
+#endif
     // ----- Read responder SM (SM0) -----
     pio_sm_config cfg_read = msx_read_responder_program_get_default_config(msx_bus.offset_read);
+#ifdef MUX_ADDR    
+    sm_config_set_in_pins(&cfg_read, PIN_A8);
+#else
     sm_config_set_in_pins(&cfg_read, PIN_A0);
+#endif
     sm_config_set_in_shift(&cfg_read, false, false, 16);
     //sm_config_set_out_pins(&cfg_read, PIN_D0, 8);
     sm_config_set_out_shift(&cfg_read, true, false, 32);
+#ifdef MUX_ADDR    
+    sm_config_set_set_pins(&cfg_read, PIN_A_HIGH, 1);
+#endif
     //sm_config_set_set_pins(&cfg_read, PIN_WAIT, 1);
     sm_config_set_jmp_pin(&cfg_read, PIN_RD);
     sm_config_set_clkdiv(&cfg_read, 1.0f);
@@ -216,24 +231,20 @@ static void msx_pio_bus_init(void)
 
     // ----- Bus writer SM -----
     pio_sm_config cfg_bus = msx_bus_writer_program_get_default_config(msx_bus.offset_bus);
-    sm_config_set_in_pins(&cfg_bus, PIN_A0);
     sm_config_set_in_shift(&cfg_bus, false, false, 16);
     sm_config_set_out_pins(&cfg_bus, PIN_D0, 8);
     sm_config_set_out_shift(&cfg_bus, true, false, 32);
-    sm_config_set_set_pins(&cfg_bus, PIN_WAIT, 2);
+    sm_config_set_sideset_pin_base(&cfg_bus, PIN_WAIT);
 
     //sm_config_set_jmp_pin(&cfg_bus, PIN_RD);
     sm_config_set_clkdiv(&cfg_bus, 1.0f);
     pio_sm_init(msx_bus.pio_bus, msx_bus.sm_bus_writer, msx_bus.offset_bus, &cfg_bus);
 
     // Now hand /WAIT to PIO1 — the output register already has it HIGH
-#if 0
-    gpio_init(PIN_WAIT); gpio_set_dir(PIN_WAIT, true); gpio_put(PIN_WAIT, true);
-#else
     pio_gpio_init(msx_bus.pio_bus, PIN_WAIT);
     pio_gpio_init(msx_bus.pio_bus, PIN_BUSDIR);
     pio_sm_set_consecutive_pindirs(msx_bus.pio_bus, msx_bus.sm_bus_writer, PIN_WAIT, 2, true);
-#endif
+
     // Set /WAIT pin HIGH in the PIO output register BEFORE switching mux.
     // This prevents a brief /WAIT=LOW glitch that would freeze the Z80.
     pio_sm_set_pins_with_mask(msx_bus.pio_bus, msx_bus.sm_bus_writer, 1u << PIN_WAIT, 1u << PIN_WAIT);
@@ -241,29 +252,30 @@ static void msx_pio_bus_init(void)
 
     // ----- Write captor SM (SM1) -----
     pio_sm_config cfg_write = msx_write_captor_program_get_default_config(msx_bus.offset_write);
+#ifdef MUX_ADDR    
+    sm_config_set_in_pins(&cfg_write, PIN_A8);
+#else
     sm_config_set_in_pins(&cfg_write, PIN_A0);
+#endif
     sm_config_set_in_shift(&cfg_write, false, false, 32);
     sm_config_set_out_shift(&cfg_write, true, false, 32);
     sm_config_set_fifo_join(&cfg_write, PIO_FIFO_JOIN_RX);
     sm_config_set_jmp_pin(&cfg_write, PIN_WR);
 #ifdef MUX_ADDR    
-    sm_config_set_set_pins(&cfg_write, PIN_A0, 1);
+    sm_config_set_set_pins(&cfg_write, PIN_A_HIGH2, 1);
 #endif
     sm_config_set_clkdiv(&cfg_write, 1.0f);
     pio_sm_init(msx_bus.pio_write, msx_bus.sm_write, msx_bus.offset_write, &cfg_write);
 
-#ifdef MUX_ADDR    
-    pio_gpio_init(msx_bus.pio, PIN_A0);
-#endif
     pio_sm_set_consecutive_pindirs(msx_bus.pio_bus, msx_bus.sm_bus_writer, PIN_WAIT, 1, true);
 
     for (uint pin = PIN_D0; pin <= PIN_D7; ++pin)
     {
-        pio_gpio_init(msx_bus.pio_read, pin);
+        pio_gpio_init(msx_bus.pio_bus, pin);
     }
-    pio_sm_set_consecutive_pindirs(msx_bus.pio_read, msx_bus.sm_read, PIN_D0, 8, false);
+    //pio_sm_set_consecutive_pindirs(msx_bus.pio_read, msx_bus.sm_read, PIN_D0, 8, false);
     pio_sm_set_consecutive_pindirs(msx_bus.pio_bus, msx_bus.sm_bus_writer, PIN_D0, 8, false);
-    pio_sm_set_consecutive_pindirs(msx_bus.pio_write, msx_bus.sm_write, PIN_D0, 8, false);
+    //pio_sm_set_consecutive_pindirs(msx_bus.pio_write, msx_bus.sm_write, PIN_D0, 8, false);
 
     pio_sm_set_enabled(msx_bus.pio_read, msx_bus.sm_read, true);
     pio_sm_set_enabled(msx_bus.pio_bus, msx_bus.sm_bus_writer, true);
@@ -293,29 +305,32 @@ static void msx_pio_io_bus_init(void)
     reset_pio(msx_io_bus.pio_write, msx_io_bus.sm_write);
 
     pio_sm_config cfg_io_read = msx_io_read_responder_program_get_default_config(msx_io_bus.offset_read);
+#ifdef MUX_ADDR    
+    sm_config_set_in_pins(&cfg_io_read, PIN_A8);
+#else
     sm_config_set_in_pins(&cfg_io_read, PIN_A0);
-    sm_config_set_in_shift(&cfg_io_read, false, false, 32);
-#if 1
-    //sm_config_set_sideset_pins(&cfg_io_read, PIN_WAIT);
-    //sm_config_set_set_pins(&cfg_io_read, PIN_WAIT, 2);
 #endif
-    //sm_config_set_out_pins(&cfg_io_read, PIN_D0, 8);
+    sm_config_set_in_shift(&cfg_io_read, false, false, 32);
     sm_config_set_out_shift(&cfg_io_read, true, false, 32);
     sm_config_set_jmp_pin(&cfg_io_read, PIN_RD);
     sm_config_set_clkdiv(&cfg_io_read, 1.0f);
 #ifdef MUX_ADDR
-    pio_sm_set_pins_with_mask(msx_io_bus.pio_read, msx_io_bus.sm_read, 0, (1 << PIN_A0));
+    pio_sm_set_pins_with_mask(msx_io_bus.pio_read, msx_io_bus.sm_read, 0, (1 << PIN_A_HIGH));
 #endif
     pio_sm_init(msx_io_bus.pio_read, msx_io_bus.sm_read, msx_io_bus.offset_read, &cfg_io_read);
 
     pio_sm_config cfg_io_write = msx_io_write_captor_program_get_default_config(msx_io_bus.offset_write);
+#ifdef MUX_ADDR    
+    sm_config_set_in_pins(&cfg_io_write, PIN_A8);
+#else
     sm_config_set_in_pins(&cfg_io_write, PIN_A0);
+#endif
     sm_config_set_in_shift(&cfg_io_write, false, false, 32);
     sm_config_set_out_shift(&cfg_io_write, true, false, 32);
     sm_config_set_fifo_join(&cfg_io_write, PIO_FIFO_JOIN_RX);
     sm_config_set_jmp_pin(&cfg_io_write, PIN_WR);
 #ifdef MUX_ADDR    
-    sm_config_set_set_pins(&cfg_io_write, PIN_A0, 1);
+    sm_config_set_set_pins(&cfg_io_write, PIN_A_HIGH2, 1);
 #endif
     sm_config_set_clkdiv(&cfg_io_write, 1.0f);
     pio_sm_init(msx_io_bus.pio_write, msx_io_bus.sm_write, msx_io_bus.offset_write, &cfg_io_write);
@@ -326,15 +341,6 @@ static void msx_pio_io_bus_init(void)
     //pio_gpio_init(msx_io_bus.pio_read, PIN_BUSDIR);
     //pio_sm_set_consecutive_pindirs(msx_io_bus.pio_read, msx_io_bus.sm_read, PIN_WAIT, 2, true);
 #endif
-
-#if 0
-    for (uint pin = PIN_D0; pin <= PIN_D7; ++pin)
-    {
-        pio_gpio_init(msx_io_bus.pio_read, pin);
-    }
-#endif
-    pio_sm_set_consecutive_pindirs(msx_io_bus.pio_read, msx_io_bus.sm_read, PIN_D0, 8, false);
-    pio_sm_set_consecutive_pindirs(msx_io_bus.pio_write, msx_io_bus.sm_write, PIN_D0, 8, false);
 
     pio_sm_set_enabled(msx_io_bus.pio_read, msx_io_bus.sm_read, true);
     pio_sm_set_enabled(msx_io_bus.pio_write, msx_io_bus.sm_write, true);
@@ -1836,16 +1842,8 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
     // Initialise PIO memory bus — this hands PIN_WAIT back to the PIO
     // read SM whose first instruction uses "side 1" (WAIT released),
     // so the MSX resumes execution with everything fully initialised.
-#if 1
+
     msx_pio_bus_init();
-#else
-    msx_bus.pio = pio0;
-    msx_bus.sm_read  = 0;
- 
-    pio_sm_set_enabled(msx_bus.pio, msx_bus.sm_read, false);
-    pio_sm_set_pins_with_mask(msx_bus.pio, msx_bus.sm_read, 1u << PIN_WAIT, 1u << PIN_WAIT);
-    pio_sm_set_enabled(msx_bus.pio, msx_bus.sm_read, true);
-#endif
     sunrise_ctx_t ctx = { .ide = &ide };
 
     // Main loop: service memory reads/writes and I/O reads/writes
