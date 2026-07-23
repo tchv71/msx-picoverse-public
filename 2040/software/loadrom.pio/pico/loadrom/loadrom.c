@@ -185,7 +185,7 @@ static void msx_pio_bus_init(void)
     msx_bus.pio_write = pio1;
     msx_bus.sm_read       = 0;
     msx_bus.sm_bus_writer = 1;
-    msx_bus.sm_write      = 3;
+    msx_bus.sm_write      = 0;
 
     if (!msx_bus_programs_loaded)
     {
@@ -201,14 +201,20 @@ static void msx_pio_bus_init(void)
     reset_pio(msx_bus.pio_read, msx_bus.sm_read);
     reset_pio(msx_bus.pio_bus, msx_bus.sm_bus_writer);
     reset_pio(msx_bus.pio_write, msx_bus.sm_write);
+    pio_sm_exec(msx_bus.pio_bus, msx_bus.sm_bus_writer, pio_encode_jmp(msx_bus.offset_bus));
 
 #ifdef MUX_ADDR
     pio_gpio_init(msx_bus.pio_read, PIN_A_HIGH);
     pio_gpio_init(msx_bus.pio_write, PIN_A_HIGH2);
+    gpio_pull_down(PIN_A_HIGH);
+    gpio_pull_down(PIN_A_HIGH2);
+    gpio_set_drive_strength(PIN_A_HIGH, GPIO_DRIVE_STRENGTH_8MA);
+    gpio_set_drive_strength(PIN_A_HIGH2, GPIO_DRIVE_STRENGTH_8MA);
     pio_sm_set_consecutive_pindirs(msx_bus.pio_read, msx_bus.sm_read, PIN_A_HIGH, 1, true);
     pio_sm_set_consecutive_pindirs(msx_bus.pio_write, msx_bus.sm_write, PIN_A_HIGH2, 1, true);
  
     pio_sm_set_pins_with_mask(msx_bus.pio_read, msx_bus.sm_read, 0/* (1 << PIN_A_HIGH) */, (1 << PIN_A_HIGH));
+    pio_sm_set_pins_with_mask(msx_bus.pio_write, msx_bus.sm_write, 0/* (1 << PIN_A_HIGH) */, (1 << PIN_A_HIGH2));
 #endif
     // ----- Read responder SM (SM0) -----
     pio_sm_config cfg_read = msx_read_responder_program_get_default_config(msx_bus.offset_read);
@@ -304,6 +310,19 @@ static void msx_pio_io_bus_init(void)
     reset_pio(msx_io_bus.pio_read, msx_io_bus.sm_read);
     reset_pio(msx_io_bus.pio_write, msx_io_bus.sm_write);
 
+#ifdef MUX_ADDR
+    pio_gpio_init(msx_io_bus.pio_read, PIN_A_HIGH);
+    pio_gpio_init(msx_io_bus.pio_write, PIN_A_HIGH2);
+    gpio_pull_down(PIN_A_HIGH);
+    gpio_pull_down(PIN_A_HIGH2);
+    gpio_set_drive_strength(PIN_A_HIGH, GPIO_DRIVE_STRENGTH_8MA);
+    gpio_set_drive_strength(PIN_A_HIGH2, GPIO_DRIVE_STRENGTH_8MA);
+    pio_sm_set_consecutive_pindirs(msx_io_bus.pio_read, msx_io_bus.sm_read, PIN_A_HIGH, 1, true);
+    pio_sm_set_consecutive_pindirs(msx_io_bus.pio_write, msx_io_bus.sm_write, PIN_A_HIGH2, 1, true);
+ 
+    pio_sm_set_pins_with_mask(msx_io_bus.pio_read, msx_io_bus.sm_read, 0/* (1 << PIN_A_HIGH) */, (1 << PIN_A_HIGH));
+    pio_sm_set_pins_with_mask(msx_io_bus.pio_write, msx_io_bus.sm_write, 0/* (1 << PIN_A_HIGH) */, (1 << PIN_A_HIGH2));
+#endif
     pio_sm_config cfg_io_read = msx_io_read_responder_program_get_default_config(msx_io_bus.offset_read);
 #ifdef MUX_ADDR    
     sm_config_set_in_pins(&cfg_io_read, PIN_A8);
@@ -336,6 +355,7 @@ static void msx_pio_io_bus_init(void)
     pio_sm_init(msx_io_bus.pio_write, msx_io_bus.sm_write, msx_io_bus.offset_write, &cfg_io_write);
 
     pio_sm_set_consecutive_pindirs(msx_io_bus.pio_read, msx_io_bus.sm_read, PIN_D0, 8, false);
+    pio_sm_set_consecutive_pindirs(msx_io_bus.pio_write, msx_io_bus.sm_write, PIN_D0, 8, false);
 #if 1
     //pio_gpio_init(msx_io_bus.pio_read, PIN_WAIT);
     //pio_gpio_init(msx_io_bus.pio_read, PIN_BUSDIR);
@@ -367,7 +387,7 @@ static inline uint16_t __not_in_flash_func(pio_build_token)(bool drive, uint8_t 
 
 // Try to consume a write event from the write captor FIFO.
 // Returns false if FIFO is empty.
-static inline bool __not_in_flash_func(pio_try_get_write)(uint16_t *addr_out, uint8_t *data_out)
+static __noinline bool __not_in_flash_func(pio_try_get_write)(uint16_t *addr_out, uint8_t *data_out)
 {
     if (pio_sm_is_rx_fifo_empty(msx_bus.pio_write, msx_bus.sm_write))
         return false;
@@ -397,8 +417,13 @@ static inline bool __not_in_flash_func(pio_try_get_io_write)(uint16_t *addr_out,
         return false;
 
     uint32_t sample = pio_sm_get(msx_io_bus.pio_write, msx_io_bus.sm_write);
+#ifdef MUX_ADDR
+    *addr_out = (uint16_t)(sample & 0xFFu);
+    *data_out = (uint8_t)((sample >> 8) & 0xFFu);
+#else
     *addr_out = (uint16_t)(sample & 0xFFFFu);
     *data_out = (uint8_t)((sample >> 16) & 0xFFu);
+#endif
     return true;
 }
 
@@ -1760,7 +1785,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
             else
             {
                 // Track execution of INIT (0x400A-0x4011)
-                if (addr >= 0x400Au && addr <= 0x4011u)
+                if (/* addr >= 0x400Au && addr <=  */ addr == 0x4011u)
                     init_called = true;
 
                 // Serve bootstrap ROM at 0x4000-0x7FFF
@@ -1768,9 +1793,9 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
                 uint8_t data = 0xFFu;
                 if (in_window)
                 {
-                    uint32_t rel = addr - 0x4000u;
-                    if (rel < sizeof(bootstrap_rom))
-                        data = bootstrap_rom[rel];
+                    bool bInTable = (addr >= 0x4000u && addr < 0x4000u+sizeof(bootstrap_rom));
+                    if (bInTable)
+                        data = bootstrap_rom[addr-0x4000u];
                 }
                 put_bus_blocking(pio_build_token(in_window, data));
             }
@@ -1780,10 +1805,21 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
             // MSX1 path: SLTSL is not asserted for addr 0x0000
             // (the BIOS ROM is in slot 0).  Detect the restart on
             // the raw address bus instead, same approach as multirom.
-            if (init_called && !gpio_get(PIN_RD) &&
-                ((gpio_get_all() & 0xFFFFu) == 0x0000u))
+            if (init_called && !gpio_get(PIN_RD))
             {
-                restart_detected = true;
+#ifdef MUX_ADDR
+                gpio_init(PIN_A_HIGH); gpio_set_dir(PIN_A_HIGH, true);
+                gpio_put(PIN_A_HIGH, true); sleep_us(1);
+                uint16_t addr = ((gpio_get_all() >> 8) & 0xFFu);
+                gpio_put(PIN_A_HIGH, false); sleep_us(1); 
+                addr = (addr << 8) | ((gpio_get_all() >> 8) & 0xFFu);
+#else
+                uint16_t addr = (gpio_get_all() & 0xFFFFu);
+#endif
+                if (addr == 0x0000u)
+                {
+                    restart_detected = true;
+                }
             }
         }
     }
@@ -1830,11 +1866,6 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
     // Clear mapper RAM
     memset(mapper_ram, 0xFF, MAPPER_SIZE);
 
-#if 0
-    gpio_init(PIN_WAIT);
-    gpio_set_dir(PIN_WAIT, GPIO_OUT);
-    gpio_put(PIN_WAIT, 1); // Assert not WAIT — free MSX bus
-#endif
     // Initialise PIO I/O bus FIRST (mapper port handlers must be ready
     // before the memory bus releases WAIT and the BIOS starts probing).
     msx_pio_io_bus_init();
@@ -1850,8 +1881,8 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
     //
     // We must poll all four FIFOs continuously:
     //   PIO0 SM0 RX (memory read) — respond with data
-    //   PIO0 SM1 RX (memory write) — handle Sunrise IDE writes + mapper RAM writes + sub-slot reg
-    //   PIO1 SM0 RX (I/O read) — respond with mapper page register values
+    //   PIO1 SM3 RX (memory write) — handle Sunrise IDE writes + mapper RAM writes + sub-slot reg
+    //   PIO0 SM2 RX (I/O read) — respond with mapper page register values
     //   PIO1 SM1 RX (I/O write) — update mapper page registers
     while (true)
     {

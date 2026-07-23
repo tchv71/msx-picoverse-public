@@ -31,7 +31,7 @@
 #define PIN_A0     0
 #define PIN_A_HIGH PIN_A0  // High/Low address select for PIO0
 #define PIN_A1     1
-#define PIN_A_HIGH2 PIN_A1 // High/Low address select for PIO1
+#define PIN_A_HIGH2 2 // High/Low address select for PIO1
 #define PIN_A2     2
 #define PIN_A3     3
 #define PIN_A4     4

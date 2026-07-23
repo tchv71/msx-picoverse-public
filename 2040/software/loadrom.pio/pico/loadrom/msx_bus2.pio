@@ -58,7 +58,8 @@
 ;     5. CPU drains write FIFO and updates bank registers
 ;
 ; -----------------------------------------------------------------------
-
+.define IRQ_VAL 4
+.define DEL 15
 ; ===================================================================
 ; msx_read_responder
 ; ===================================================================
@@ -82,15 +83,16 @@
 ; had a race condition: after a write to our slot, SM0 would pass the
 ; /SLTSL wait but then respond to an unrelated /RD assertion.
 
- .wrap_target
     set pindirs, 1
+    .wrap_target
 wait_sltsl:
     wait 0 gpio 27          ; Wait for /SLTSL=0 (slot selected). /WAIT released.
     jmp pin wait_sltsl      ; If /RD=1 (no read), re-check /SLTSL
-    irq clear 4             ; Set PIN_WAIT=0 on msx_bus_writer SM
-    set pins, 1 [8]
+    irq clear IRQ_VAL       ; Set PIN_WAIT=0 on msx_bus_writer SM
+    set pins, 1 [DEL]
+    nop [31]
     in  pins, 8
-    set pins, 0 [8]
+    set pins, 0 [31]
     in  pins, 8
     push block              ; Send address to CPU via RX FIFO
     wait 1 gpio 24          ; Wait for /RD=1 (bus cycle ends)
@@ -101,19 +103,18 @@ wait_sltsl:
 ; ===================================================================
 ; Writes byte from FIFO to data bus
 .program msx_bus_writer
+.side_set 2 opt
 .wrap_target
-    set pins, 3
-    mov osr, null
+    mov osr, null side 3         ; PIN_WAIT = 1 ; PIN_BUSDIR = 1
     out  pindirs, 8
-    irq wait 4
-    set pins, 2
+    irq wait IRQ_VAL             ; Wait for read command begins executing
+    nop side 2
     pull block                   ; Wait for CPU response in TX FIFO (data token)
     out pins, 8                  ; Drive D0..D7 with data byte
     out pindirs, 8               ; Set pindirs (0xFF=output, 0x00=tristate)
-    set pins, 3                 ; Release /WAIT=1; data is now valid. 2-cycle hold.
-    mov x,osr           
+    mov x,osr  side 3            ; PIN_WAIT = 1 ; PIN_BUSDIR = 1         
     jmp !x, skip_busdir 
-    set pins, 1        
+    nop side 1                   ; PIN_WAIT = 1 ; PIN_BUSDIR = 0 (OUT)        
 skip_busdir:
     wait 1 gpio 24               ; Wait for /RD=1 (bus cycle ends)
 .wrap
@@ -142,15 +143,14 @@ skip_busdir:
 .wrap_target
 wait_sltsl:
     wait 0 gpio 27           ; Wait for /SLTSL=0 (slot selected)
-    jmp pin wait_sltsl        ; If /WR=1 (no write), re-check /SLTSL
-    ;nop              [2]     ; Let address + data settle (3 cycles)
-    wait 1 gpio 25           ; Wait for /WR=1 (write cycle ends)
-    ;mov isr, pins            ; Snapshot all GPIOs into ISR
-    set pins, 1 [8]
+    jmp pin wait_sltsl       ; If /WR=1 (no write), re-check /SLTSL
+    set pins, 1 [31]
+    ;nop [31]
+    in  pins, 16
+    set pins, 0 [31]
     in  pins, 8
-    set pins, 0 [8]
-    in  pins, 24
     push block               ; Send (addr+data) to CPU via RX FIFO
+    wait 1 gpio 25           ; Wait for /WR=1 (write cycle ends)
 .wrap
 
 ; ===================================================================
@@ -178,12 +178,14 @@ wait_iorq:
     wait 0 gpio 26           ; Wait for /IORQ=0 (I/O request)
     jmp pin wait_iorq         ; If /WR=1 (no write), re-check /IORQ
     ;nop              [2]     ; Let address + data settle (3 cycles)
+    set pins, 0 ;[31]
+    ;mov x, pins            ; Snapshot all GPIOs into ISR
     wait 1 gpio 25           ; Wait for /WR=1 (write cycle ends)
-    ;mov isr, pins            ; Snapshot all GPIOs into ISR
-    set pins, 1 [8]
-    in  pins, 8
-    set pins, 0 [8]
-    in  pins, 24
+    in  pins, 16
+    ;in  x, 16
+    ;set pins, 1 [DEL]
+    ;nop [31]
+    ;in  pins, 16
     push block               ; Send (addr+data) to CPU via RX FIFO
 .wrap
 
@@ -208,13 +210,13 @@ wait_iorq:
 ;   /RD=0 (active)   → fall through → handle the read
     set pindirs, 1      
 .wrap_target
-    set pins, 0        
-wait_iorq:
+wait_iorqr:
     wait 0 gpio 26           ; Wait for /IORQ=0. /WAIT released.
-    jmp pin wait_iorq        ; If /RD=1 (no read), loop back
-    irq clear 4
-    in  pins, 8
+    jmp pin wait_iorqr        ; If /RD=1 (no read), loop back
+    irq clear IRQ_VAL
+    set pins, 0 [DEL]        
     in  null, 8
+    in  pins, 8
     push block               ; Send address to CPU via RX FIFO
     wait 1 gpio 24           ; Wait for /RD=1 (bus cycle complete)
 .wrap
