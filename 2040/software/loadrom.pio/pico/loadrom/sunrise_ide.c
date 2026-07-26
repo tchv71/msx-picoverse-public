@@ -34,7 +34,7 @@ static scsi_inquiry_resp_t inquiry_resp;
 
 static uint8_t current_dev_addr = 0;
 static uint8_t current_lun = 0;
-static volatile bool usb_device_mounted = false;
+volatile bool usb_device_mounted = false;
 static volatile uint32_t usb_block_count = 0;
 static volatile uint32_t usb_block_size = 0;
 
@@ -42,13 +42,13 @@ static volatile uint32_t usb_block_size = 0;
 // usb_read_buffer is 4096 bytes to accommodate devices with 4K native sectors.
 // Each USB read fetches one native block; we extract the correct 512-byte slice.
 CFG_TUH_MEM_SECTION TU_ATTR_ALIGNED(4) static uint8_t usb_read_buffer[4096];
-CFG_TUH_MEM_SECTION TU_ATTR_ALIGNED(4) static uint8_t usb_write_buffer[512];
+TU_ATTR_ALIGNED(4) uint8_t usb_write_buffer[512];
 
 // Pending request flags (set by Core 0/IDE handler, cleared by Core 1)
-static volatile bool usb_read_requested = false;
-static volatile uint32_t usb_read_lba = 0;
-static volatile bool usb_write_requested = false;
-static volatile uint32_t usb_write_lba = 0;
+volatile bool usb_read_requested = false;
+volatile uint32_t usb_read_lba = 0;
+volatile bool usb_write_requested = false;
+volatile uint32_t usb_write_lba = 0;
 
 static volatile bool usb_read_in_progress = false;
 static volatile bool usb_write_in_progress = false;
@@ -654,6 +654,32 @@ void sunrise_usb_set_ide_ctx(sunrise_ide_t *ide)
     usb_ide_ctx = ide;
 }
 
+void sunrise_ide_set_device_info(uint32_t block_count, uint32_t block_size,
+                                const char *vendor, const char *product,
+                                const char *revision)
+{
+    usb_block_count = block_count;
+    usb_block_size = block_size;
+    memset(&inquiry_resp, 0, sizeof(inquiry_resp));
+    if (vendor) {
+        size_t len = strlen(vendor);
+        if (len > sizeof(inquiry_resp.vendor_id)) len = sizeof(inquiry_resp.vendor_id);
+        memcpy(inquiry_resp.vendor_id, vendor, len);
+    }
+    if (product) {
+        size_t len = strlen(product);
+        if (len > sizeof(inquiry_resp.product_id)) len = sizeof(inquiry_resp.product_id);
+        memcpy(inquiry_resp.product_id, product, len);
+    }
+    if (revision) {
+        size_t len = strlen(revision);
+        if (len > sizeof(inquiry_resp.product_rev)) len = sizeof(inquiry_resp.product_rev);
+        memcpy(inquiry_resp.product_rev, revision, len);
+    }
+}
+
+extern volatile bool bSerialEstablished;
+
 void __not_in_flash_func(sunrise_usb_task)(void)
 {
     // Initialize TinyUSB host stack
@@ -662,6 +688,8 @@ void __not_in_flash_func(sunrise_usb_task)(void)
 
     while (true)
     {
+        while (bSerialEstablished) ;
+        
         tuh_task();
 
         if (usb_ide_ctx == NULL)

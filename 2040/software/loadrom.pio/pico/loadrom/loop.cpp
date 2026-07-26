@@ -13,7 +13,7 @@ CircBuffer<1024> bufOut;
 
 static volatile bool bFlushOutBuffer = false;
 static volatile uint8_t outLength = 0xff;
-bool bSerialEstablished = false;
+volatile bool bSerialEstablished = false;
 
 void __not_in_flash_func(putSerial)(uint8_t c)
 {

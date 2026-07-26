@@ -149,4 +149,11 @@ void __not_in_flash_func(sunrise_usb_task)(void);
 // Set the pointer to the shared IDE context for the USB task (call before launching core 1).
 void sunrise_usb_set_ide_ctx(sunrise_ide_t *ide);
 
+// Populate IDENTIFY DEVICE fields for non-USB backends (e.g. SD card).
+// Sets the block count, block size, and SCSI-style vendor/product/revision
+// strings used by build_identify_data().  Call before setting usb_device_mounted.
+void sunrise_ide_set_device_info(uint32_t block_count, uint32_t block_size,
+                                const char *vendor, const char *product,
+                                const char *revision);
+
 #endif // SUNRISE_IDE_H

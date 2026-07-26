@@ -35,7 +35,9 @@
 #include "loop.h"
 #include "tusb_config.h"
 #include "tusb.h"
-
+#ifdef MUX_ADDR
+#include "sunrise_sd.h"
+#endif
 // -----------------------------------------------------------------------
 // PIO bus context
 // -----------------------------------------------------------------------
@@ -1690,6 +1692,29 @@ void __no_inline_not_in_flash_func(loadrom_neo16)(uint32_t offset)
 // -----------------------------------------------------------------------
 static volatile uint8_t keys[16];
 static volatile uint8_t keyboard_row;
+extern volatile bool bSerialEstablished;
+
+void __not_in_flash_func(get_FT245_status)(uint32_t *p_add, bool *p_in_window, uint8_t *p_data)
+{
+    if (p_add)
+        *p_add = 0x10000;
+    if (p_in_window)
+        *p_in_window = true;
+    if (!tud_inited())
+        tud_init(0);
+    bool bEmpty = bufIsEmpty();
+    if (bEmpty)
+    {
+        if (p_data)
+            *p_data = FT245R_RXEMPTY | (bSerialEstablished ? 0 : FT245R_TXFULL);
+    }
+    else
+    {
+        if (p_data)
+            *p_data = 0;
+        bSerialEstablished = true;
+    }
+}
 
 // -----------------------------------------------------------------------
 // loadrom_sunrise_mapper - Sunrise IDE Nextor + 192KB Memory Mapper (test)
@@ -1847,8 +1872,13 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
     sunrise_ide_init(&ide);
 
     // Share IDE context with Core 1 and launch USB host task
+#ifdef MUX_ADDR
+    sunrise_sd_set_ide_ctx(&ide);
+    multicore_launch_core1(sunrise_sd_task/* sunrise_usb_task */);
+#else
     sunrise_usb_set_ide_ctx(&ide);
     multicore_launch_core1(sunrise_usb_task);
+#endif
 
     // Initialise mapper page registers (BIOS convention)
     uint8_t mapper_reg[4] = { 3, 2, 1, 0 };  // FC, FD, FE, FF
@@ -1875,7 +1905,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
     // so the MSX resumes execution with everything fully initialised.
 
     msx_pio_bus_init();
-    sunrise_ctx_t ctx = { .ide = &ide };
+    //sunrise_ctx_t ctx = { .ide = &ide };
 
     // Main loop: service memory reads/writes and I/O reads/writes
     //
@@ -1985,7 +2015,6 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
         // I/O ports are global (not slot-dependent), so the mapper must
         // always respond to FC-FF reads regardless of subslot selection.
         {
-            extern bool bSerialEstablished;
             uint16_t io_addr;
             while (pio_try_get_io_read(&io_addr))
             {
@@ -2007,20 +2036,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
                 }
                 else if (port == FT245R + 1)
                 {
-                    _add = 0x10000;
-                    in_window = true;
-                    if (!tud_inited())
-                        tud_init(0);
-                    bool bEmpty = bufIsEmpty();
-                    if (bEmpty)
-                    {
-                        data = FT245R_RXEMPTY | (bSerialEstablished ? 0 : FT245R_TXFULL);
-                    }
-                    else
-                    {
-                        data = 0;
-                        bSerialEstablished = true;
-                    }
+                    get_FT245_status(&_add, &in_window, &data);
                 }
                 else if (port == FT245R + 2)
                 {
@@ -2036,7 +2052,6 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
         // --- Handle memory reads ---
         if (!pio_sm_is_rx_fifo_empty(msx_bus.pio_read, msx_bus.sm_read))
         {
-            extern bool bSerialEstablished;
             uint16_t addr = (uint16_t)pio_sm_get(msx_bus.pio_read, msx_bus.sm_read);
             uint8_t data = 0xFFu;
             bool in_window = false;
@@ -2061,19 +2076,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
                 }
                 else if (addr == FT245RM + 1)
                 {
-                    in_window = true;
-                    if (!tud_inited())
-                        tud_init(0);
-                    bool bEmpty = bufIsEmpty();
-                    if (bEmpty)
-                    {
-                        data = FT245R_RXEMPTY | (bSerialEstablished ? 0 : FT245R_TXFULL);
-                    }
-                    else
-                    {
-                        data = 0;
-                        bSerialEstablished = true;
-                    }
+                    get_FT245_status(NULL, &in_window, &data);
                 }
                 else if (addr == FT245RM + 2)
                 {

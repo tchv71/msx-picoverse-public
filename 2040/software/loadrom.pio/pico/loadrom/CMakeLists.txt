@@ -29,6 +29,11 @@ project(loadrom C CXX ASM)
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
+# SD card library (no-OS-FatFS-SD-SDIO-SPI-RPi-Pico)
+add_subdirectory(lib/no-OS-FatFS-SD-SDIO-SPI-RPi-Pico/src build_sd_lib)
+
+# add_compile_options(-O3)
+
 # Add executable. Default name is the project name, version 0.1
 
 add_executable(loadrom 
@@ -38,6 +43,8 @@ add_executable(loadrom
     sunrise_ide.c
     usb-descriptors.c
     #usb_msc_driver.c
+    sunrise_sd.c
+    hw_config.c
 )
 
 pico_generate_pio_header(loadrom ${CMAKE_CURRENT_LIST_DIR}/msx_bus.pio)
@@ -59,6 +66,7 @@ target_link_libraries(loadrom
         tinyusb_board
         tinyusb_host
         tinyusb_device
+        no-OS-FatFS-SD-SDIO-SPI-RPi-Pico
 )
 
 # Add the standard include files to the build

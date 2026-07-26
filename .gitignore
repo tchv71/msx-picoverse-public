@@ -30,3 +30,6 @@ _autosave-*
 2040/software/loadrom.pio/pico/loadrom/loadrom2.c
 2040/software/loadrom.pio/pico/loadrom/msx_bus_orig.pio
 2040/software/loadrom.pio/pico/loadrom/dist/loadrom.bin
+.DS_Store
+2040/.DS_Store
+orig/msx-picoverse-public
