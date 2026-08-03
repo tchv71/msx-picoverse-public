@@ -26,7 +26,7 @@
 #include "../../tool/src/nextor_sunrise.h"
 #include "loadrom.h"
 #include "sunrise_ide.h"
-//#define MUX_ADDR
+#define MUX_ADDR
 #ifdef MUX_ADDR
 #include "msx_bus2.pio.h"
 #else
@@ -1716,6 +1716,30 @@ void __not_in_flash_func(get_FT245_status)(uint32_t *p_add, bool *p_in_window, u
     }
 }
 
+void __not_in_flash_func(get_FT245_avail)(uint32_t *p_add, bool *p_in_window, uint8_t *p_data)
+{
+    if (p_add)
+        *p_add = 0x10000;
+    if (p_in_window)
+        *p_in_window = true;
+#if 0
+    bool bEmpty = tud_cdc_available() == 0;
+    if (!bEmpty)
+    {
+        if (p_data)
+            *p_data = tud_cdc_read_char();
+    }
+    else
+    {
+        if (p_data)
+            *p_data = 0;
+    }
+#else
+    if (p_data && !bufIsEmpty(p_data))
+        *p_data = bufGetByte();
+#endif
+}
+
 // -----------------------------------------------------------------------
 // loadrom_sunrise_mapper - Sunrise IDE Nextor + 192KB Memory Mapper (test)
 // -----------------------------------------------------------------------
@@ -2029,10 +2053,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
                 }
                 else  if (port == FT245R)
                 {
-                    _add = 0x10000;
-                    in_window = true;
-                    if (!bufIsEmpty(&data))
-                        data = bufGetByte();
+                    get_FT245_avail(&_add, &in_window, &data);
                 }
                 else if (port == FT245R + 1)
                 {
@@ -2071,8 +2092,7 @@ void __no_inline_not_in_flash_func(loadrom_sunrise_mapper)(uint32_t offset, bool
             {
                 if (addr == FT245RM)
                 {
-                    in_window = true;
-                    data = bufIsEmpty() ? 0 : bufGetByte();
+                    get_FT245_avail(NULL, &in_window, &data);
                 }
                 else if (addr == FT245RM + 1)
                 {
@@ -2147,15 +2167,14 @@ int __no_inline_not_in_flash_func(Start)()
     // Set system clock to 230MHz for ROM loading timing headroom
     set_sys_clock_khz(230000, true);
 
-    //tuh_init(BOARD_TUH_RHPORT);
-    //tud_init(0);
+#ifndef MUX_ADDR
     tusb_init();
-    //tud_init(0);
+#else
+    tud_init(0);
+#endif
     stdio_init_all();
     // Initialize GPIO
     setup_gpio();
-    // while (true)
-    //     tud_task();
 
     // Parse ROM header
     char rom_name[ROM_NAME_MAX];
